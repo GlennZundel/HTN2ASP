@@ -17,18 +17,10 @@ holds(F, T+1) :-
     adds(A, F),
     time(T), T < n.
 
-% Declare static predicates (predicates that never change)
-static(door(_,_,_)).
-static(goal_in(_,_)).
 
 % Test (Constraint): Eine Aktion darf nur stattfinden, wenn ihre Vorbedingungen erfüllt sind.
-% For dynamic predicates (fluents)
-:- occurs(A, T), precondition(A, F), not static(F), not holds(F, T).
-% For static predicates
-:- occurs(A, T), precondition(A, F), static(F), not F.
-
-:- occurs(A, T), neg_precondition(A, F), not static(F), holds(F, T).
-:- occurs(A, T), neg_precondition(A, F), static(F), F.
+:- occurs(A, T), precondition(A, F), not holds(F, T).
+:- occurs(A, T), neg_precondition(A, F), holds(F, T).
 
 % --- b) HTN-Zerlegung und Zielerreichung ---
 
@@ -50,37 +42,17 @@ achieves(T, T_start, T_end) :-
     achieves_subtasks(M, 1, T_start, T_end).
 
 %%Tests
-% Method preconditions for dynamic predicates
-:- achieves(T, T_start, _),
-   decomposes(M, T),
-   achieves_subtasks(M, 1, T_start, _),
-   method_precondition(M, F),
-   not static(F),
-   not holds(F, T_start).
-
-% Method preconditions for static predicates
-:- achieves(T, T_start, _),
-   decomposes(M, T),
-   achieves_subtasks(M, 1, T_start, _),
-   method_precondition(M, F),
-   static(F),
-   not F.
-
-% Negative method preconditions for dynamic predicates
 :- achieves(T, T_start, _),
    decomposes(M, T),
    achieves_subtasks(M, 1, T_start, _),
    neg_method_precondition(M, F),
-   not static(F),
    holds(F, T_start).
 
-% Negative method preconditions for static predicates
 :- achieves(T, T_start, _),
    decomposes(M, T),
    achieves_subtasks(M, 1, T_start, _),
-   neg_method_precondition(M, F),
-   static(F),
-   F.
+   method_precondition(M, F),
+   not holds(F, T_start).
 
 
 % Hilfsprädikat zur sequenziellen Abarbeitung der Teilaufgaben einer Methode

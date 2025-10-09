@@ -1,4 +1,4 @@
-#const n=8.
+#const n=20.
 package(o1).
 room(c). room(r1). room(r2). room(r3).
 roomdoor(d12). roomdoor(d13). roomdoor(d01).
