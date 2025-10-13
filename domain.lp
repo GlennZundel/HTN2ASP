@@ -4,7 +4,7 @@ time(0..n).
 %%compound tasks
 abstract(achieve_goals).
 abstract(release).
-abstract(pickup_abstract(Obj)) :- package(Obj).
+abstract(pickup_abstract(Obj, Loc)) :- package(Obj), room(Loc).
 abstract(putdown_abstract(Obj, Loc)) :- package(Obj), room(Loc).
 abstract(move_abstract(Loc1, Loc2, D)) :- room(Loc1), room(Loc2), roomdoor(D).
 abstract(open_abstract(Loc1, Loc2, D)) :- room(Loc1), room(Loc2), roomdoor(D).
@@ -67,7 +67,7 @@ decomposes(achieve_goals_pickup(Loc, Obj), achieve_goals) :- room(Loc), package(
 method_precondition(achieve_goals_pickup(Loc, Obj), rloc(Loc)) :- room(Loc), package(Obj).
 method_precondition(achieve_goals_pickup(Loc, Obj), in(Obj, Loc)) :- room(Loc), package(Obj).
 neg_method_precondition(achieve_goals_pickup(Loc, Obj), goal_in(Obj, Loc)) :- room(Loc), package(Obj).
-subtask(achieve_goals_pickup(Loc, Obj), 1, pickup_abstract(Obj)) :- room(Loc), package(Obj).
+subtask(achieve_goals_pickup(Loc, Obj), 1, pickup_abstract(Obj, Loc)) :- room(Loc), package(Obj).
 subtask(achieve_goals_pickup(Loc, Obj), 2, release) :- room(Loc), package(Obj).
 method(achieve_goals_pickup(Loc, Obj)) :- room(Loc), package(Obj).
 
@@ -85,18 +85,18 @@ decomposes(finished, achieve_goals).
 method_precondition(finished, in(o1, r2)).
 method(finished).
 
-decomposes(newMethod22(Obj, Loc), pickup_abstract(Obj)) :- room(Loc), package(Obj).
+decomposes(newMethod22(Obj, Loc), pickup_abstract(Obj, Loc)) :- room(Loc), package(Obj).
 subtask(newMethod22(Obj, Loc), 1, pickup(Obj, Loc)) :- room(Loc), package(Obj).
-method(newMethod22).
+method(newMethod22(Obj, Loc)) :- package(Obj), room(Loc).
 
 decomposes(newMethod23(Obj, Loc), putdown_abstract(Obj, Loc)) :- room(Loc), package(Obj).
 subtask(newMethod23(Obj, Loc), 1, putdown(Obj, Loc)) :- room(Loc), package(Obj).
-method(newMethod23).
+method(newMethod23(Obj, Loc)) :- package(Obj), room(Loc).
 
 decomposes(newMethod24(Loc1, Loc2, D), move_abstract(Loc1, Loc2, D)) :- room(Loc1), room(Loc2), roomdoor(D).
 subtask(newMethod24(Loc1, Loc2, D), 1, move(Loc1, Loc2, D)) :- room(Loc1), room(Loc2), roomdoor(D).
-method(newMethod24).
+method(newMethod24(Loc1, Loc2, D)) :- room(Loc1), room(Loc2), roomdoor(D).
 
 decomposes(newMethod25(Loc1, Loc2, D), open_abstract(Loc1, Loc2, D)) :- room(Loc1), room(Loc2), roomdoor(D).
 subtask(newMethod25(Loc1, Loc2, D), 1, open(Loc1, Loc2, D)) :- room(Loc1), room(Loc2), roomdoor(D).
-method(newMethod25).
+method(newMethod25(Loc1, Loc2, D)) :- room(Loc1), room(Loc2), roomdoor(D).
