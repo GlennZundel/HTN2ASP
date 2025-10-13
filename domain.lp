@@ -1,5 +1,3 @@
-time(0..n).
-
 
 %%compound tasks
 abstract(achieve_goals).

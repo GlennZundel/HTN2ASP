@@ -1,3 +1,4 @@
+time(0..n).
 
 0 { occurs(A, T) : action(A) } 1 :- time(T), T < n.
 
