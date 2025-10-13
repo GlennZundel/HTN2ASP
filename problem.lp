@@ -1,4 +1,4 @@
-#const n=7.
+#const n=30.
 package(o1).
 room(c). room(r1). room(r2). room(r3).
 roomdoor(d12). roomdoor(d13). roomdoor(d01).
@@ -19,5 +19,4 @@ holds(goal_in(o1, r2),0).
 initial_task(achieve_goals).
 
 % Goal constraint: Das Paket muss am Ende im Zielraum sein
-:- not holds(in(o1, r2), n).
-
+:- #count{ T : holds(in(o1, r2), T) } = 0.
