@@ -1,11 +1,11 @@
 
 %%compound tasks
-abstract(achieve_goals).
-abstract(release).
-abstract(pickup_abstract(Obj, Loc)) :- package(Obj), room(Loc).
-abstract(putdown_abstract(Obj, Loc)) :- package(Obj), room(Loc).
-abstract(move_abstract(Loc1, Loc2, D)) :- room(Loc1), room(Loc2), roomdoor(D).
-abstract(open_abstract(Loc1, Loc2, D)) :- room(Loc1), room(Loc2), roomdoor(D).
+compound(achieve_goals).
+compound(release).
+compound(pickup_abstract(Obj, Loc)) :- package(Obj), room(Loc).
+compound(putdown_abstract(Obj, Loc)) :- package(Obj), room(Loc).
+compound(move_abstract(Loc1, Loc2, D)) :- room(Loc1), room(Loc2), roomdoor(D).
+compound(open_abstract(Loc1, Loc2, D)) :- room(Loc1), room(Loc2), roomdoor(D).
 
 %%primitive tasks
 action(pickup(Obj, Loc)) :- package(Obj), room(Loc).
