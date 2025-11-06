@@ -4,28 +4,7 @@
 % ================================================================
 
 % ################################################################
-% ## 1. DOMÄNENUNABHÄNGIGES FRAMEWORK                           ##
-% ################################################################
-
-% Definition der Zeitachse. 10 Schritte sollten für dieses Problem ausreichen.
-time(0..7).
-
-% Frame-Axiom: Ein Faktum bleibt wahr, es sei denn, es wird explizit entfernt.
-in_state(A, T+1) :-
-    time(T),
-    atom(A),
-    in_state(A, T),
-    not out_state(A, T+1).
-
-% Erfolgsbedingung: Ein Plan ist gefunden, wenn die initiale Aufgabe 'achieve_goals' erfüllt ist.
-plan_found :- causable(achieve_goals, 0, T_final), T_final >= 0.
-
-% Es werden nur Modelle berücksichtigt, die einen gültigen Plan darstellen.
-:- not plan_found.
-
-
-% ################################################################
-% ## 2. KONSTANTEN UND ATOM-DEKLARATIONEN (aus Domain & Problem)##
+% ## 1. KONSTANTEN UND ATOM-DEKLARATIONEN (aus Domain & Problem)##
 % ################################################################
 
 package(o1).
@@ -44,7 +23,7 @@ atom(goal_in(O, R)) :- package(O), room(R).
 
 
 % ################################################################
-% ## 3. INITIALZUSTAND - Trans(S)                               ##
+% ## 2. INITIALZUSTAND - Trans(S)                               ##
 % ################################################################
 
 
@@ -62,7 +41,7 @@ in_state(goal_in(o1, r2), 0).
 
 
 % ################################################################
-% ## 4. ZIELAUFGABE(N) - Trans(t)                               ##
+% ## 3. ZIELAUFGABE(N) - Trans(t)                               ##
 % ################################################################
 
 
@@ -71,7 +50,7 @@ taskTBA(achieve_goals, 0).
 
 
 % ################################################################
-% ## 5. OPERATOREN (Aktionen) - Trans(OP)                       ##
+% ## 4. OPERATOREN (Aktionen) - Trans(OP)                       ##
 % ################################################################
 
 
@@ -94,11 +73,11 @@ out_state(closed(D), T+1) :- taskTBA(open(L1, L2, D), T).
 
 
 % ################################################################
-% ## 6. METHODEN - Trans(METH)                                  ##
+% ## 5. METHODEN - Trans(METH)                                  ##
 % ################################################################
 
 
-% --- 6.1 Übersetzung von "abstrakten" zu "primitiven" Aufgaben ---
+% --- 5.1 Übersetzung von "abstrakten" zu "primitiven" Aufgaben ---
 
 
 % Methode für 'pickup_abstract' -> 'pickup'
@@ -150,7 +129,7 @@ causable(open_abstract, T_start, T_end) :-
     causable(open(L1, L2, D), T_start, T_end).
 
 
-% --- 6.2 Übersetzung der Kontrollfluss-Methoden ---
+% --- 5.2 Übersetzung der Kontrollfluss-Methoden ---
 
 % --- Methoden für 'achieve-goals' ---
 % Nicht-deterministische Auswahl einer der vier möglichen Methoden
@@ -218,7 +197,7 @@ causable(release, T, T3)  :- method_rel_open(T), causable(release, T2, T3), T3 >
 
 
 % ################################################################
-% ## 7. CAUSABLE DEFINITION FÜR PRIMITIVE AUFGABEN              ##
+% ## 6. CAUSABLE DEFINITION FÜR PRIMITIVE AUFGABEN              ##
 % ################################################################
 
 % Eine primitive Aufgabe ist 'causable' einen Zeitschritt nachdem sie gestartet wurde.

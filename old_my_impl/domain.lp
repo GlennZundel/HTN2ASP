@@ -2,10 +2,10 @@
 %%compound tasks
 compound(achieve_goals).
 compound(release).
-compound(pickup_abstract(Obj, Loc)) :- package(Obj), room(Loc).
-compound(putdown_abstract(Obj, Loc)) :- package(Obj), room(Loc).
-compound(move_abstract(Loc1, Loc2, D)) :- room(Loc1), room(Loc2), roomdoor(D).
-compound(open_abstract(Loc1, Loc2, D)) :- room(Loc1), room(Loc2), roomdoor(D).
+compound(pickup_abstract(Obj)) :- package(Obj).
+compound(putdown_abstract).
+compound(move_abstract).
+compound(open_abstract).
 
 %%primitive tasks
 action(pickup(Obj, Loc)) :- package(Obj), room(Loc).
@@ -47,17 +47,17 @@ decomposes(release_putdown_abstract(Loc, Obj), release) :- room(Loc), package(Ob
 method_precondition(release_putdown_abstract(Loc, Obj), rloc(Loc)) :- room(Loc), package(Obj).
 method_precondition(release_putdown_abstract(Loc, Obj), holding(Obj)):- room(Loc), package(Obj).
 method_precondition(release_putdown_abstract(Loc, Obj), goal_in(Obj, Loc)) :- room(Loc), package(Obj).
-subtask(release_putdown_abstract(Loc, Obj), 1, putdown_abstract(Obj, Loc)) :- room(Loc), package(Obj).
+subtask(release_putdown_abstract(Loc, Obj), 1, putdown_abstract) :- room(Loc), package(Obj).
 subtask(release_putdown_abstract(Loc, Obj), 2, achieve_goals) :- room(Loc), package(Obj).
 method(release_putdown_abstract(Loc, Obj)) :- room(Loc), package(Obj).
 
 decomposes(release_move(Loc1, Loc2, D), release) :- room(Loc1), room(Loc2), roomdoor(D).
-subtask(release_move(Loc1, Loc2, D), 1, move_abstract(Loc1, Loc2, D)) :- room(Loc1), room(Loc2), roomdoor(D).
+subtask(release_move(Loc1, Loc2, D), 1, move_abstract) :- room(Loc1), room(Loc2), roomdoor(D).
 subtask(release_move(Loc1, Loc2, D), 2, release) :- room(Loc1), room(Loc2), roomdoor(D).
 method(release_move(Loc1, Loc2, D)) :- room(Loc1), room(Loc2), roomdoor(D).
 
 decomposes(release_open(Loc1, Loc2, D), release) :- room(Loc1), room(Loc2), roomdoor(D).
-subtask(release_open(Loc1, Loc2, D), 1, open_abstract(Loc1, Loc2, D)) :- room(Loc1), room(Loc2), roomdoor(D).
+subtask(release_open(Loc1, Loc2, D), 1, open_abstract) :- room(Loc1), room(Loc2), roomdoor(D).
 subtask(release_open(Loc1, Loc2, D), 2, release) :- room(Loc1), room(Loc2), roomdoor(D).
 method(release_open(Loc1, Loc2, D)) :- room(Loc1), room(Loc2), roomdoor(D).
 
@@ -65,17 +65,17 @@ decomposes(achieve_goals_pickup(Loc, Obj), achieve_goals) :- room(Loc), package(
 method_precondition(achieve_goals_pickup(Loc, Obj), rloc(Loc)) :- room(Loc), package(Obj).
 method_precondition(achieve_goals_pickup(Loc, Obj), in(Obj, Loc)) :- room(Loc), package(Obj).
 neg_method_precondition(achieve_goals_pickup(Loc, Obj), goal_in(Obj, Loc)) :- room(Loc), package(Obj).
-subtask(achieve_goals_pickup(Loc, Obj), 1, pickup_abstract(Obj, Loc)) :- room(Loc), package(Obj).
+subtask(achieve_goals_pickup(Loc, Obj), 1, pickup_abstract(Obj)) :- room(Loc), package(Obj).
 subtask(achieve_goals_pickup(Loc, Obj), 2, release) :- room(Loc), package(Obj).
 method(achieve_goals_pickup(Loc, Obj)) :- room(Loc), package(Obj).
 
 decomposes(achieve_goals_move(Loc1, Loc2, D), achieve_goals) :- room(Loc1), room(Loc2), roomdoor(D).
-subtask(achieve_goals_move(Loc1, Loc2, D), 1, move_abstract(Loc1, Loc2, D)) :- room(Loc1), room(Loc2), roomdoor(D).
+subtask(achieve_goals_move(Loc1, Loc2, D), 1, move_abstract) :- room(Loc1), room(Loc2), roomdoor(D).
 subtask(achieve_goals_move(Loc1, Loc2, D), 2, achieve_goals) :- room(Loc1), room(Loc2), roomdoor(D).
 method(achieve_goals_move(Loc1, Loc2, D)) :- room(Loc1), room(Loc2), roomdoor(D).
 
 decomposes(achieve_goals_open(Loc1, Loc2, D), achieve_goals) :- room(Loc1), room(Loc2), roomdoor(D).
-subtask(achieve_goals_open(Loc1, Loc2, D), 1, open_abstract(Loc1, Loc2, D)) :- room(Loc1), room(Loc2), roomdoor(D).
+subtask(achieve_goals_open(Loc1, Loc2, D), 1, open_abstract) :- room(Loc1), room(Loc2), roomdoor(D).
 subtask(achieve_goals_open(Loc1, Loc2, D), 2, achieve_goals) :- room(Loc1), room(Loc2), roomdoor(D).
 method(achieve_goals_open(Loc1, Loc2, D)) :- room(Loc1), room(Loc2), roomdoor(D).
 
@@ -83,18 +83,18 @@ decomposes(finished, achieve_goals).
 method_precondition(finished, in(o1, r2)).
 method(finished).
 
-decomposes(newMethod22(Obj, Loc), pickup_abstract(Obj, Loc)) :- room(Loc), package(Obj).
+decomposes(newMethod22(Obj, Loc), pickup_abstract(Obj)) :- room(Loc), package(Obj).
 subtask(newMethod22(Obj, Loc), 1, pickup(Obj, Loc)) :- room(Loc), package(Obj).
 method(newMethod22(Obj, Loc)) :- package(Obj), room(Loc).
 
-decomposes(newMethod23(Obj, Loc), putdown_abstract(Obj, Loc)) :- room(Loc), package(Obj).
+decomposes(newMethod23(Obj, Loc), putdown_abstract) :- room(Loc), package(Obj).
 subtask(newMethod23(Obj, Loc), 1, putdown(Obj, Loc)) :- room(Loc), package(Obj).
 method(newMethod23(Obj, Loc)) :- package(Obj), room(Loc).
 
-decomposes(newMethod24(Loc1, Loc2, D), move_abstract(Loc1, Loc2, D)) :- room(Loc1), room(Loc2), roomdoor(D).
+decomposes(newMethod24(Loc1, Loc2, D), move_abstract) :- room(Loc1), room(Loc2), roomdoor(D).
 subtask(newMethod24(Loc1, Loc2, D), 1, move(Loc1, Loc2, D)) :- room(Loc1), room(Loc2), roomdoor(D).
 method(newMethod24(Loc1, Loc2, D)) :- room(Loc1), room(Loc2), roomdoor(D).
 
-decomposes(newMethod25(Loc1, Loc2, D), open_abstract(Loc1, Loc2, D)) :- room(Loc1), room(Loc2), roomdoor(D).
+decomposes(newMethod25(Loc1, Loc2, D), open_abstract) :- room(Loc1), room(Loc2), roomdoor(D).
 subtask(newMethod25(Loc1, Loc2, D), 1, open(Loc1, Loc2, D)) :- room(Loc1), room(Loc2), roomdoor(D).
 method(newMethod25(Loc1, Loc2, D)) :- room(Loc1), room(Loc2), roomdoor(D).
