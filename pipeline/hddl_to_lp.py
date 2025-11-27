@@ -1,5 +1,6 @@
 import sys
 import re
+import os
 from collections import defaultdict
 
 class HDDLParser:
@@ -17,8 +18,8 @@ class HDDLParser:
         
         self.objects = {}
         self.initial_state = []
-        self.goal_state = []  # Neu: Ziele
-        self.htn_task = None
+        self.goal_state = []  
+        self.htn_tasks = []
 
     def _read_file(self, file_path):
         """Read file and remove comments."""
@@ -122,10 +123,24 @@ class HDDLParser:
             while i < len(sexp_str) and sexp_str[i] in ' \t\n':
                 i += 1
             sexp_str = sexp_str[i:].strip()
-        
+
+        # Handle single atom case (no more parentheses)
+        if '(' not in sexp_str:
+            # Single atom case, e.g., "factory-at ?f ?l" or "not factory-at ?f ?l"
+            tokens = sexp_str.split()
+            if tokens:
+                if tokens[0].lower() == 'not':
+                    # Handle negation without parens: "not factory-at ?f ?l"
+                    negated_atom = tuple(t.lower() for t in tokens[1:])
+                    return [('not', negated_atom)]
+                else:
+                    # Simple positive atom
+                    return [tuple(t.lower() for t in tokens)]
+            return []
+
         result = []
         pos = 0
-        
+
         while pos < len(sexp_str):
             if sexp_str[pos] == '(':
                 expr, next_pos = self._extract_balanced(sexp_str, pos)
@@ -346,54 +361,112 @@ class HDDLParser:
             pos = method_start + len(method_block) if method_block else pos + 1
 
     def _parse_problem(self):
-        """Parse problem file."""
-        content = self.problem_content
-        
-        # Parse objects
-        objects_match = re.search(r'\(:objects\s+(.*?)\)', content, re.DOTALL | re.IGNORECASE)
-        if objects_match:
-            typed_list = self._parse_typed_list(objects_match.group(1))
-            for obj, typ in typed_list:
-                self.objects[obj] = typ
-        
-        # Parse init
-        init_match = re.search(r'\(:init\s+(.*?)(?:\(:goal|\(:htn|\)$)', content, re.DOTALL | re.IGNORECASE)
-        if init_match:
-            init_text = init_match.group(1)
-            pos = 0
-            while pos < len(init_text):
-                if init_text[pos] == '(':
-                    atom_expr, next_pos = self._extract_balanced(init_text, pos)
-                    if atom_expr:
-                        self.initial_state.append(self._parse_atom(atom_expr))
-                    pos = next_pos
-                else:
-                    pos += 1
-        
-        # Parse HTN
-        htn_match = re.search(r'\(:htn\s+(.*?)\)\s*\(:(?:goal|init|\))', content, re.DOTALL | re.IGNORECASE)
-        if not htn_match:
-            htn_match = re.search(r'\(:htn\s+(.*)\)', content, re.DOTALL | re.IGNORECASE)
-        if htn_match:
-            htn_text = htn_match.group(1)
-            task_match = re.search(r'\(task\d*\s+\(([^)]+)\)', htn_text, re.IGNORECASE)
-            if task_match:
-                task_tokens = task_match.group(1).split()
-                self.htn_task = tuple(t.lower() for t in task_tokens)
-        
-        # Parse goals
-        goal_match = re.search(r'\(:goal\s+', content, re.IGNORECASE)
-        if goal_match:
-            goal_start = goal_match.start()
-            goal_block, _ = self._extract_balanced(content, goal_start)
-            if goal_block:
-                # Remove (:goal and outer parens
-                goal_text = goal_block[1:-1] if goal_block.startswith('(') and goal_block.endswith(')') else goal_block
-                # Find where :goal ends
-                goal_keyword_end = goal_text.lower().find(':goal') + len(':goal')
-                goal_content = goal_text[goal_keyword_end:].strip()
-                if goal_content:
-                    self.goal_state = self._parse_condition_list(goal_content)
+            """Parse problem file robustly using balanced extraction."""
+            content = self.problem_content
+            
+            # 1. Parse objects
+            obj_match = re.search(r'\(:objects\s', content, re.IGNORECASE)
+            if obj_match:
+                start = obj_match.start()
+                block, _ = self._extract_balanced(content, start)
+                if block:
+                    # Inhalt ohne (:objects und )
+                    # Wir suchen die erste Klammer nach :objects für den Fall von (:objects (a - type))
+                    # oder nehmen einfach den Text nach dem Keyword
+                    keyword_end = block.lower().find(':objects') + len(':objects')
+                    inner = block[keyword_end:-1].strip()
+                    typed_list = self._parse_typed_list(inner)
+                    for obj, typ in typed_list:
+                        self.objects[obj] = typ
+
+            # 2. Parse init
+            init_match = re.search(r'\(:init\s', content, re.IGNORECASE)
+            if init_match:
+                start = init_match.start()
+                block, _ = self._extract_balanced(content, start)
+                if block:
+                    keyword_end = block.lower().find(':init') + len(':init')
+                    inner = block[keyword_end:-1].strip()
+                    pos = 0
+                    while pos < len(inner):
+                        if inner[pos] == '(':
+                            atom_expr, next_pos = self._extract_balanced(inner, pos)
+                            if atom_expr:
+                                self.initial_state.append(self._parse_atom(atom_expr))
+                            pos = next_pos
+                        else:
+                            pos += 1
+
+            # 3. Parse HTN
+            htn_match = re.search(r'\(:htn\s', content, re.IGNORECASE)
+            if htn_match:
+                start = htn_match.start()
+                block, _ = self._extract_balanced(content, start)
+                if block:
+                    # Suche nach der Task-Liste (:ordered-tasks, :subtasks, etc.)
+                    st_match = re.search(r':(?:ordered-tasks|ordered-subtasks|tasks|subtasks)\s', block, re.IGNORECASE)
+                    if st_match:
+                        # Finde den Start der Liste (erste Klammer nach dem Keyword)
+                        list_start = block.find('(', st_match.end())
+                        if list_start != -1:
+                            task_list_expr, _ = self._extract_balanced(block, list_start)
+                            if task_list_expr:
+                                inner_content = task_list_expr
+                                
+                                # Robustes Entfernen von (and ...)
+                                # Prüfen, ob der Block mit (and beginnt (case insensitive, ignoring whitespace)
+                                if re.match(r'\(\s*and\s', inner_content, re.IGNORECASE):
+                                    # Entferne äußere Klammern
+                                    inner_content = inner_content[1:-1].strip()
+                                    # Entferne das 'and' am Anfang
+                                    inner_content = re.sub(r'^and\s+', '', inner_content, flags=re.IGNORECASE).strip()
+                                elif inner_content.startswith('(') and inner_content.endswith(')'):
+                                    # Entferne äußere Klammern des Listen-Wrappers
+                                    # ABER VORSICHT: Wenn es (task1 arg) ist (einzelne Task), dürfen wir nicht strippen,
+                                    # wenn es ((task1) (task2)) ist, müssen wir strippen.
+                                    
+                                    # Check: Ist das erste Element im Inneren wieder eine Klammer?
+                                    temp_inner = inner_content[1:-1].strip()
+                                    if temp_inner.startswith('('):
+                                        inner_content = temp_inner
+                                    # Sonst (bei einzelner Task wie (do_stuff a b)) lassen wir die Klammern dran,
+                                    # damit der Loop unten sie als EINE Task findet.
+
+                                # Iteriere durch die Tasks
+                                pos = 0
+                                while pos < len(inner_content):
+                                    if inner_content[pos] == '(':
+                                        task_expr, next_pos = self._extract_balanced(inner_content, pos)
+                                        if task_expr:
+                                            # task_expr ist z.B. (task0 (achieve-goals)) ODER (move a b)
+                                            
+                                            # Tokenize um Struktur zu prüfen
+                                            tokens = self._tokenize_sexp(task_expr)
+                                            
+                                            # UNWRAP LOGIC:
+                                            # Wenn wir genau 2 Tokens haben und das zweite mit '(' beginnt,
+                                            # ist es wahrscheinlich ein Label: (label (actual_task ...))
+                                            if len(tokens) == 2 and tokens[1].startswith('('):
+                                                # Wir parsen den inneren Teil als Task
+                                                inner_task_str = tokens[1]
+                                                self.htn_tasks.append(self._parse_atom(inner_task_str))
+                                            else:
+                                                # Standard Task: (name arg1 arg2)
+                                                self.htn_tasks.append(tuple(t.lower() for t in tokens))
+                                                
+                                        pos = next_pos
+                                    else:
+                                        pos += 1
+
+            # 4. Parse goals
+            goal_match = re.search(r'\(:goal\s', content, re.IGNORECASE)
+            if goal_match:
+                start = goal_match.start()
+                block, _ = self._extract_balanced(content, start)
+                if block:
+                    keyword_end = block.lower().find(':goal') + len(':goal')
+                    inner = block[keyword_end:-1].strip()
+                    self.goal_state = self._parse_condition_list(inner)
 
 
 class ASPTranslator:
@@ -402,6 +475,74 @@ class ASPTranslator:
     def __init__(self, parsed_data):
         self.data = parsed_data
         self.method_groups = self._group_methods()
+
+    def _preprocess_actions_with_preconditions(self):
+        """
+        Für jede action mit preconditions: erstelle compound task wrapper + methode.
+        Returns: dict mapping original action name to wrapper task name
+        """
+        action_wrappers = {}
+        new_methods = []
+        
+        for action_name, action in self.data.actions.items():
+            if action['pre']:  # Hat preconditions
+                # Erstelle compound task wrapper
+                wrapper_name = f"{action_name}_wrapper"
+                wrapper_params = action['params']
+                
+                # Registriere als compound task
+                self.data.tasks[wrapper_name] = wrapper_params
+                
+                # Erstelle wrapper task atom
+                param_names = tuple(p[0] for p in wrapper_params)
+                wrapper_task = (wrapper_name,) + param_names
+                
+                # Erstelle subtask (die originale primitive task)
+                original_subtask = (action_name,) + param_names
+                
+                # Erstelle Methode die wrapper zerlegt
+                method = {
+                    'name': f"m_{wrapper_name}",
+                    'params': wrapper_params,
+                    'task': wrapper_task,
+                    'preconditions': action['pre'],  # Preconditions der action
+                    'subtasks': [original_subtask]   # Nur die primitive task
+                }
+                
+                new_methods.append(method)
+                action_wrappers[action_name] = wrapper_name
+        
+        # Füge neue Methoden hinzu
+        self.data.methods.extend(new_methods)
+        
+        # Update method_groups
+        self.method_groups = self._group_methods()
+        
+        return action_wrappers
+
+    def _replace_action_references_in_methods(self, action_wrappers):
+        """
+        Ersetze in allen Methoden die Referenzen auf primitive tasks mit preconditions
+        durch ihre wrapper compound tasks.
+        """
+        for method in self.data.methods:
+            # Skip die neu erstellten wrapper-methoden
+            if method['name'].startswith('m_') and method['name'].endswith('_wrapper'):
+                continue
+            
+            # Ersetze in subtasks
+            new_subtasks = []
+            for subtask in method['subtasks']:
+                task_name = subtask[0]
+                if task_name in action_wrappers:
+                    # Ersetze durch wrapper
+                    wrapper_name = action_wrappers[task_name]
+                    new_subtask = (wrapper_name,) + subtask[1:]
+                    new_subtasks.append(new_subtask)
+                else:
+                    new_subtasks.append(subtask)
+            
+            method['subtasks'] = new_subtasks
 
     def _group_methods(self):
         """Group methods by task."""
@@ -428,424 +569,432 @@ class ASPTranslator:
             return name
         return f"{name}({', '.join(params)})"
 
-    def translate(self):
-        """Generate ASP code."""
-        lines = []
-        
-        lines.append("% ================================================================")
-        lines.append("% == ASP-Übersetzung für die Roboter-Domäne                    ==")
-        lines.append("% == Basierend auf der Methodik von Dix, Kuter & Nau (2005)   ==")
-        lines.append("% ================================================================")
-        lines.append("")
-        
-        # 1. Constants
-        lines.append("% ################################################################")
-        lines.append("% ## 1. KONSTANTEN UND ATOM-DEKLARATIONEN (aus Domain & Problem)##")
-        lines.append("% ################################################################")
-        lines.append("")
-        
-        type_objs = defaultdict(list)
-        for obj, typ in self.data.objects.items():
-            type_objs[typ].append(obj)
-        
-        for typ in sorted(type_objs.keys()):
-            objs = type_objs[typ]
-            lines.append(f"{typ}({'; '.join(objs)}).")
-        
-        lines.append("")
-        lines.append("% --- Deklaration aller möglichen Atome für das Grounding ---")
-        lines.append("")
-        
-        for pred_name in sorted(self.data.predicates.keys()):
-            params = self.data.predicates[pred_name]
-            if not params:
-                lines.append(f"atom({pred_name}).")
+    def _get_time_var(self, n):
+        """Generate time variable name. Returns 'T' for n<=1, 'T{n}' for n>1."""
+        if n <= 1:
+            return "T"
+        return f"T{n}"
+
+    def _get_variables_from_conditions(self, conditions):
+        """Extract all variables from condition atoms."""
+        variables = set()
+        for cond in conditions:
+            if isinstance(cond, tuple) and cond[0] == 'not':
+                # Negated condition
+                atom = cond[1]
             else:
-                vars = [self._fmt_term(v) for v, _ in params]
-                types = [t for _, t in params]
-                type_conds = [f"{types[i]}({vars[i]})" for i in range(len(params))]
-                atom_str = f"{pred_name}({', '.join(vars)})"
-                lines.append(f"atom({atom_str}) :- {', '.join(type_conds)}.")
-        
-        lines.append("")
-        lines.append("")
-        
-        # 2. Initial state
-        lines.append("% ################################################################")
-        lines.append("% ## 2. INITIALZUSTAND - Trans(S)                               ##")
-        lines.append("% ################################################################")
-        lines.append("")
-        lines.append("")
-        
-        for atom in self.data.initial_state:
-            lines.append(f"in_state({self._fmt_atom(atom)}, 0).")
-        
-        lines.append("")
-        lines.append("")
-        
-        # 3. Goal task
-        lines.append("% ################################################################")
-        lines.append("% ## 3. ZIELAUFGABE(N) - Trans(t)                               ##")
-        lines.append("% ################################################################")
-        lines.append("")
-        lines.append("")
-        
-        if self.data.htn_task:
-            task_name = self.data.htn_task[0].replace('-', '_')
-            lines.append(f"% Die initiale Aufgabe zur Zeit 0 ist '{self.data.htn_task[0]}'.")
-            lines.append(f"taskTBA({task_name}, 0).")
-        
-        lines.append("")
-        lines.append("")
-        
-        # 4. Actions
-        lines.append("% ################################################################")
-        lines.append("% ## 4. OPERATOREN (Aktionen) - Trans(OP)                       ##")
-        lines.append("% ################################################################")
-        lines.append("")
-        lines.append("")
-        
-        for action_name in sorted(self.data.actions.keys()):
-            action_data = self.data.actions[action_name]
-            lines.append(f"% --- Operator '{action_name}' ---")
+                atom = cond
             
-            param_vars = [v for v, _ in action_data['params']]
-            task_head = self._fmt_atom(tuple([action_name] + param_vars))
+            # Extract variables (terms starting with ?)
+            for term in atom[1:] if len(atom) > 1 else []:
+                if term.startswith('?'):
+                    variables.add(term)
+        return variables
+
+    def _get_typing_constraints(self, variables, param_list):
+        """Generate typing constraints for variables based on parameter list."""
+        # Build a map from variable name to type
+        type_map = {}
+        for var, typ in param_list:
+            type_map[var] = typ
+        
+        # Generate typing constraints
+        typing_clauses = []
+        for var in variables:
+            var_lower = var.lower()
+            if var_lower in type_map:
+                typ = type_map[var_lower]
+                # Only add if type is not 'object' (default)
+                if typ != 'object':
+                    typing_clauses.append(f"{typ}({self._fmt_term(var)})")
+        
+        return typing_clauses
+
+    def _get_task_typing_constraints(self, task_atom):
+        """Generate typing constraints for a task's parameters."""
+        if not task_atom or len(task_atom) < 2:
+            return []
+        
+        task_name = task_atom[0]
+        task_params = task_atom[1:]
+        
+        # Get parameter types from actions or tasks
+        param_types = None
+        if task_name in self.data.actions:
+            param_types = self.data.actions[task_name]['params']
+        elif task_name in self.data.tasks:
+            param_types = self.data.tasks[task_name]
+        
+        if not param_types:
+            return []
+        
+        # Generate typing constraints
+        typing_clauses = []
+        for i, param in enumerate(task_params):
+            if param.startswith('?') and i < len(param_types):
+                typ = param_types[i][1]
+                if typ != 'object':
+                    typing_clauses.append(f"{typ}({self._fmt_term(param)})")
+        
+        return typing_clauses
+
+    def _fmt_method_head(self, method, time_var):
+        """Format method head with parameters."""
+        name = method['name'].replace('-', '_')
+        params = [self._fmt_term(p[0]) for p in method['params']]
+        if not params:
+            return f"{name}({time_var})"
+        return f"{name}({', '.join(params)}, {time_var})"
+
+    def translate_domain(self):
+        """Translate domain to ASP."""
+        action_wrappers = self._preprocess_actions_with_preconditions()
+        self._replace_action_references_in_methods(action_wrappers)
+
+        rules = []
+        
+        # Header comment
+        rules.append("% Primitive tasks (actions)")
+        rules.append("")
+        
+        # Translate primitive tasks (actions)
+        for action_name, action in self.data.actions.items():
+            # Build action atom
+            param_names = tuple(p[0] for p in action['params'])
+            action_atom_tuple = (action_name,) + param_names
+            action_atom = self._fmt_atom(action_atom_tuple)
             
-            for eff in action_data['eff']:
+            # Get typing constraints for action parameters
+            action_typing = self._get_task_typing_constraints(action_atom_tuple)
+            
+            # Build body for causable rule
+            body_parts = [f"taskTBA({action_atom}, T)"] + action_typing
+            body = ", ".join(body_parts)
+            
+            # causable rule for primitive task
+            causable_rule = f"causable({action_atom}, T, T+1) :- {body}."
+            rules.append(causable_rule)
+            
+            # Effects
+            for eff in action['eff']:
                 if isinstance(eff, tuple) and eff[0] == 'not':
-                    atom_str = self._fmt_atom(eff[1])
-                    lines.append(f"out_state({atom_str}, T+1)   :- taskTBA({task_head}, T).")
+                    # Delete effect
+                    eff_atom = self._fmt_atom(eff[1])
+                    delete_rule = f"out_state({eff_atom}, T+1) :- taskTBA({action_atom}, T)."
+                    rules.append(delete_rule)
                 else:
-                    atom_str = self._fmt_atom(eff)
-                    lines.append(f"in_state({atom_str}, T+1) :- taskTBA({task_head}, T).")
+                    # Add effect
+                    eff_atom = self._fmt_atom(eff)
+                    add_rule = f"in_state({eff_atom}, T+1) :- taskTBA({action_atom}, T)."
+                    rules.append(add_rule)
             
-            lines.append("")
+            rules.append("")
         
-        lines.append("")
+        # Translate methods
+        rules.append("% Method selection rules")
+        rules.append("")
         
-        # 5. Methods
-        lines.append("% ################################################################")
-        lines.append("% ## 5. METHODEN - Trans(METH)                                  ##")
-        lines.append("% ################################################################")
-        lines.append("")
-        lines.append("")
-        lines.append("% --- 5.1 Übersetzung von \"abstrakten\" zu \"primitiven\" Aufgaben ---")
-        lines.append("")
-        lines.append("")
+        for task_name, methods in self.method_groups.items():
+            for method in methods:
+                method_head = self._fmt_method_head(method, "T")
+                task_atom = self._fmt_atom(method['task'])
+
+                # Get typing constraints for the task parameters
+                task_typing = self._get_task_typing_constraints(method['task'])
+
+                # Get typing constraints for the method parameters (all of them)
+                method_typing = self._get_typing_constraints(
+                    [p[0] for p in method['params']],
+                    method['params']
+                )
+
+                # Generate "not" clauses for other methods
+                other_methods_clauses = []
+                for m in methods:
+                    if m['name'] != method['name']:
+                        m_name = m['name'].replace('-', '_')
+                        # Count params
+                        n_params = len(m['params'])
+                        if n_params > 0:
+                            anon_args = ", ".join(["_"] * n_params)
+                            other_methods_clauses.append(f"not {m_name}({anon_args}, T)")
+                        else:
+                            other_methods_clauses.append(f"not {m_name}(T)")
+
+                # Build body parts WITHOUT preconditions
+                body_parts = [f"taskTBA({task_atom}, T)"]
+                # Add typing constraints (merge task and method typing, remove duplicates)
+                all_typing = sorted(list(set(task_typing + method_typing)))
+                body_parts.extend(all_typing)
+                body_parts.extend(other_methods_clauses)
+
+                # Simple rule without cardinality constraints
+                body = ", ".join(body_parts)
+                method_rule = f"{method_head} :- {body}."
+                rules.append(method_rule)
+            rules.append("")
         
-        # Simple methods (abstract to primitive)
-        for method in sorted(self.data.methods, key=lambda m: m['name']):
-            if method['name'].startswith('newmethod'):
-                self._translate_simple_method(method, lines)
+        # Translate subtasks for each method
+        rules.append("% Subtask rules")
+        rules.append("")
         
-        lines.append("")
-        lines.append("% --- 5.2 Übersetzung der Kontrollfluss-Methoden ---")
-        lines.append("")
+        for task_name, methods in self.method_groups.items():
+            for method in methods:
+                method_head = self._fmt_method_head(method, "T")
+                subtasks = method['subtasks']
+                preconditions = method['preconditions']
+
+                # Build precondition clauses
+                precond_clauses = []
+                for precond in preconditions:
+                    if isinstance(precond, tuple) and precond[0] == 'not':
+                        precond_clauses.append(f"not in_state({self._fmt_atom(precond[1])}, T)")
+                    else:
+                        precond_clauses.append(f"in_state({self._fmt_atom(precond)}, T)")
+
+                # Get typing constraints for variables in preconditions
+                precond_vars = self._get_variables_from_conditions(preconditions)
+                typing_clauses = self._get_typing_constraints(precond_vars, method['params'])
+
+                # Generate subtask rules
+                for i, subtask in enumerate(subtasks):
+                    subtask_atom = self._fmt_atom(subtask)
+
+                    # Get typing constraints for the subtask's parameters
+                    task_typing_clauses = self._get_task_typing_constraints(subtask)
+
+                    # Build rule body (with preconditions)
+                    body_parts = [f"{method_head}"] + precond_clauses + typing_clauses
+                    
+                    # Add causable constraint for immediately previous subtask
+                    if i > 0:
+                        prev_subtask = self._fmt_atom(subtasks[i-1])
+                        prev_time = "T" if i == 1 else f"T{i}"
+                        curr_time = f"T{i+1}"
+                        body_parts.append(f"causable({prev_subtask}, {prev_time}, {curr_time})")
+                        body_parts.append(f"{curr_time} >= {prev_time}")
+                    
+                    # Determine time variable for this subtask
+                    if i == 0:
+                        time_var = "T"
+                    else:
+                        time_var = f"T{i+1}"
+                    
+                    # Apply cardinality constraints for primitive tasks only
+                    # Remove duplicate typing constraints
+                    existing_constraints = set(body_parts)
+                    unique_task_typing = [tc for tc in task_typing_clauses if tc not in existing_constraints]
+                    body_with_types = body_parts + unique_task_typing
+                    body = ", ".join(body_with_types)
+
+                    # Check if this subtask is a primitive task (action) or compound task
+                    subtask_name = subtask[0]
+                    is_primitive = subtask_name in self.data.actions
+
+                    if is_primitive:
+                        # Cardinality constraint for primitive tasks
+                        subtask_rule = f"0 {{ taskTBA({subtask_atom}, {time_var}) : {body} }} 1 :- time(T)."
+                    else:
+                        # Regular rule for compound tasks
+                        subtask_rule = f"taskTBA({subtask_atom}, {time_var}) :- {body}."
+
+                    rules.append(subtask_rule)
+                
+                rules.append("")
         
-        # Complex methods
-        for task_name in sorted(self.method_groups.keys()):
-            if not task_name.endswith('_abstract'):
-                self._translate_complex_methods(task_name, lines)
+        # Causable rules for compound tasks
+        rules.append("% Causable rules for compound tasks")
+        rules.append("")
         
-        lines.append("")
-        
-        # 6. Causable
-        lines.append("% ################################################################")
-        lines.append("% ## 6. CAUSABLE DEFINITION FÜR PRIMITIVE AUFGABEN              ##")
-        lines.append("% ################################################################")
-        lines.append("")
-        
-        for action_name in sorted(self.data.actions.keys()):
-            action_data = self.data.actions[action_name]
-            param_vars = [v for v, _ in action_data['params']]
-            task_head = self._fmt_atom(tuple([action_name] + param_vars))
-            lines.append(f"causable({task_head}, T, T+1)   :- taskTBA({task_head}, T).")
-        
-        lines.append("")
-        lines.append("")
-        
-        # 7. Deklaration primitiver Tasks (für Constraints)
-        lines.append("% ################################################################")
-        lines.append("% ## 7. DEKLARATION PRIMITIVER TASKS                            ##")
-        lines.append("% ################################################################")
-        lines.append("")
-        
-        for action_name in sorted(self.data.actions.keys()):
-            action_data = self.data.actions[action_name]
-            param_vars = [v for v, _ in action_data['params']]
-            param_types = [t for _, t in action_data['params']]
+        for task_name, methods in self.method_groups.items():
+            for method in methods:
+                task_atom = self._fmt_atom(method['task'])
+                method_head = self._fmt_method_head(method, "T")
+                subtasks = method['subtasks']
+                preconditions = method['preconditions']
+
+                # Get typing constraints for the compound task itself
+                compound_task_typing = self._get_task_typing_constraints(method['task'])
+
+                # Build precondition clauses
+                precond_clauses = []
+                for precond in preconditions:
+                    if isinstance(precond, tuple) and precond[0] == 'not':
+                        precond_clauses.append(f"not in_state({self._fmt_atom(precond[1])}, T)")
+                    else:
+                        precond_clauses.append(f"in_state({self._fmt_atom(precond)}, T)")
+
+                # Get typing constraints
+                precond_vars = self._get_variables_from_conditions(preconditions)
+                typing_clauses = self._get_typing_constraints(precond_vars, method['params'])
+
+                # Build causable constraints for all subtasks
+                causable_clauses = []
+                for i, subtask in enumerate(subtasks):
+                    subtask_atom = self._fmt_atom(subtask)
+                    if i == 0:
+                        causable_clauses.append(f"causable({subtask_atom}, T, T2)")
+                        causable_clauses.append("T2 >= T")
+                    else:
+                        causable_clauses.append(f"causable({subtask_atom}, T{i+1}, T{i+2})")
+                        causable_clauses.append(f"T{i+2} >= T{i+1}")
+
+                # Combine all body parts (with preconditions)
+                body_parts = [f"{method_head}"] + precond_clauses + typing_clauses + compound_task_typing + causable_clauses
+                body = ", ".join(body_parts)
+                
+                # Final time variable
+                final_time = f"T{len(subtasks)+1}" if len(subtasks) != 0 else "T"
+                
+                causable_rule = f"causable({task_atom}, T, {final_time}) :- {body}."
+                rules.append(causable_rule)
             
-            # Format task head
-            task_head = self._fmt_atom(tuple([action_name] + param_vars))
+            rules.append("")
+        
+        return "\n".join(rules)
+
+    def translate_problem(self):
+        """Translate problem to ASP."""
+        rules = []
+        
+        # Header comment
+        rules.append("% Problem-specific facts")
+        rules.append("")
+
+        # Translate objects
+        rules.append("% Object declarations")
+        for obj, typ in self.data.objects.items():
+            if typ != 'object':  # Don't add default type
+                rules.append(f"{typ}({obj}).")
+        rules.append("")
+
+        # Translate initial state
+        rules.append("% Initial state")
+        for atom in self.data.initial_state:
+            formatted_atom = self._fmt_atom(atom)
+            rules.append(f"in_state({formatted_atom}, 0).")
+        rules.append("")
+        
+        # Translate HTN tasks
+        rules.append("% HTN Tasks")
+        previous_task_atom = None
+        previous_time_end = None
+        
+        for i, task in enumerate(self.data.htn_tasks):
+            task_atom = self._fmt_atom(task)
             
-            # Generate type constraints
-            if param_vars:
-                type_constraints = [f"{param_types[i]}({self._fmt_term(param_vars[i])})" 
-                                  for i in range(len(param_vars))]
-                lines.append(f"primitive_task({task_head}) :- {', '.join(type_constraints)}.")
+            if i == 0:
+                # First task starts at 0
+                rules.append(f"taskTBA({task_atom}, 0).")
+                previous_time_end = "T1" # Assuming first task ends at T1
             else:
-                lines.append(f"primitive_task({task_head}).")
-        
-        lines.append("")
-        lines.append("")
-        
-        # 8. Trans(G) - Goal Translation
-        lines.append("% ################################################################")
-        lines.append("% ## 8. ZIEL-ÜBERSETZUNG - Trans(G)                             ##")
-        lines.append("% ################################################################")
-        lines.append("")
-        lines.append("% Die Ziele aus der :goal Sektion des Problems müssen erfüllt sein")
-        lines.append("")
-        
-        if self.data.goal_state:
-            lines.append("% Für jedes Ziel: Es muss zu IRGENDEINEM Zeitpunkt erfüllt sein")
-            for i, goal in enumerate(self.data.goal_state):
-                if isinstance(goal, tuple) and goal[0] == 'not':
-                    atom_str = self._fmt_atom(goal[1])
-                    lines.append(f"goal_{i}_satisfied :- not in_state({atom_str}, T), time(T).")
+                # Subsequent tasks depend on previous task
+                # taskTBA(hi, Ti) :- causable(hi-1, Ti-1, Ti), Ti >= Ti-1.
+                
+                prev_task_atom = self._fmt_atom(self.data.htn_tasks[i-1])
+                
+                # So for i=1 (second task):
+                # taskTBA(h1, T1) :- causable(h0, 0, T1), T1 >= 0.
+                # Note: h0 starts at 0.
+                
+                # For i=2 (third task):
+                # taskTBA(h2, T2) :- causable(h1, T1, T2), T2 >= T1.
+                
+                if i == 1:
+                    rule = f"taskTBA({task_atom}, T1) :- causable({prev_task_atom}, 0, T1), T1 >= 0, time(T1)."
                 else:
-                    atom_str = self._fmt_atom(goal)
-                    lines.append(f"goal_{i}_satisfied :- in_state({atom_str}, T), time(T).")
-            
-            # Alle Ziele müssen erfüllt sein
-            goal_conditions = [f"goal_{i}_satisfied" for i in range(len(self.data.goal_state))]
-            lines.append(f"goal_satisfied :- {', '.join(goal_conditions)}.")
-        else:
-            lines.append("% Keine expliziten Ziele definiert")
-            lines.append("goal_satisfied.")
-        
-        lines.append("")
-        lines.append("")
-        
-        # 9. Trans(⊥) - Successful Termination
-        lines.append("% ################################################################")
-        lines.append("% ## 9. ERFOLGREICHE TERMINIERUNG - Trans(⊥)                    ##")
-        lines.append("% ################################################################")
-        lines.append("")
-        lines.append("% Ein Plan ist erfolgreich, wenn:")
-        lines.append("% 1. Die initiale Aufgabe causable ist")
-        lines.append("% 2. Alle Ziele im Endzustand erfüllt sind")
-        lines.append("")
-        
-        if self.data.htn_task:
-            task_name = self.data.htn_task[0].replace('-', '_')
-            if len(self.data.htn_task) > 1:
-                task_params = ', '.join(self._fmt_term(p) for p in self.data.htn_task[1:])
-                lines.append(f"plan_found :- causable({task_name}({task_params}), 0, T_final), goal_satisfied, time(T_final).")
-            else:
-                lines.append(f"plan_found :- causable({task_name}, 0, T_final), goal_satisfied, time(T_final).")
-        
-        lines.append("")
-        lines.append("% Integrity Constraint: Es muss einen Plan geben")
-        lines.append(":- not plan_found.")
-        
-        lines.append("")
-        lines.append("")
-        
-        # 10. Constraints
-        lines.append("% ################################################################")
-        lines.append("% ## 10. CONSTRAINTS                                             ##")
-        lines.append("% ################################################################")
-        lines.append("")
-        lines.append("% Constraint 1: Nur eine primitive Aktion pro Zeitschritt")
-        lines.append("% (Verhindert gleichzeitige Ausführung mehrerer Aktionen)")
-        lines.append(":- taskTBA(A1, T), taskTBA(A2, T), A1 != A2,")
-        lines.append("   primitive_task(A1), primitive_task(A2), time(T).")
-        
-        return '\n'.join(lines)
+                    prev_start_var = f"T{i-1}"
+                    current_start_var = f"T{i}"
+                    rule = f"taskTBA({task_atom}, {current_start_var}) :- causable({prev_task_atom}, {prev_start_var}, {current_start_var}), {current_start_var} >= {prev_start_var}, time({prev_start_var}), time({current_start_var})."
+                
+                rules.append(rule)
 
-    def _translate_simple_method(self, method, lines):
-        """Translate abstract-to-primitive method."""
-        task_name = method['task'][0] if method['task'] else ''
-        task_name_asp = task_name.replace('-', '_')
-        method_pred = f"method_{task_name_asp}"
-        
-        # Method head
-        if method['task'] and len(method['task']) > 1:
-            task_params = [self._fmt_term(p) for p in method['task'][1:]]
-            lines.append(f"% Methode für '{task_name}' -> '{method['subtasks'][0][0] if method['subtasks'] else ''}'")
-            lines.append(f"{method_pred}({', '.join(task_params)}, T) :- taskTBA({task_name_asp}({', '.join(task_params)}), T).")
-        else:
-            lines.append(f"% Methode für '{task_name}' -> '{method['subtasks'][0][0] if method['subtasks'] else ''}'")
-            lines.append(f"{method_pred}(T) :- taskTBA({task_name_asp}, T).")
-        
-        if not method['subtasks']:
-            lines.append("")
-            return
-        
-        # Get action
-        subtask = method['subtasks'][0]
-        action_name = subtask[0]
-        action_data = self.data.actions.get(action_name, {})
-        
-        if not action_data:
-            lines.append("")
-            return
-        
-        subtask_atom = self._fmt_atom(subtask)
-        
-        # taskTBA rule with preconditions
-        preconditions = []
-        for pre in action_data.get('pre', []):
-            if isinstance(pre, tuple) and pre[0] == 'not':
-                preconditions.append(f"not in_state({self._fmt_atom(pre[1])}, T)")
-            else:
-                preconditions.append(f"in_state({self._fmt_atom(pre)}, T)")
-        
-        if method['task'] and len(method['task']) > 1:
-            method_call = f"{method_pred}({', '.join([self._fmt_term(p) for p in method['task'][1:]])}, T)"
-        else:
-            method_call = f"{method_pred}(T)"
-        
-        lines.append(f"taskTBA({subtask_atom}, T) :-")
-        lines.append(f"    {method_call},")
-        for i, pre in enumerate(preconditions):
-            suffix = "." if i == len(preconditions) - 1 else ","
-            comment = f" % Preconditions der '{action_name}'-Aktion" if i == len(preconditions) - 1 else ""
-            lines.append(f"    {pre}{suffix}{comment}")
-        
-        # Causable rule
-        lines.append(f"causable({self._fmt_atom(method['task'])}, T_start, T_end) :-")
-        
-        cond_lines = []
-        
-        # Method call
-        if method['task'] and len(method['task']) > 1:
-            cond_lines.append(f"{method_pred}({', '.join([self._fmt_term(p) for p in method['task'][1:]])}, T_start)")
-        else:
-            cond_lines.append(f"{method_pred}(T_start)")
-        
-        # Type constraints
-        for v, t in method['params']:
-            cond_lines.append(f"{t}({self._fmt_term(v)})")
-        
-        # Preconditions
-        for pre in action_data.get('pre', []):
-            if isinstance(pre, tuple) and pre[0] == 'not':
-                cond_lines.append(f"not in_state({self._fmt_atom(pre[1])}, T_start)")
-            else:
-                cond_lines.append(f"in_state({self._fmt_atom(pre)}, T_start)")
-        
-        # Causable of action
-        cond_lines.append(f"causable({subtask_atom}, T_start, T_end)")
-        
-        for i, cond in enumerate(cond_lines):
-            suffix = "." if i == len(cond_lines) - 1 else ","
-            lines.append(f"    {cond}{suffix}")
-        
-        lines.append("")
+        rules.append("")
 
-    def _translate_complex_methods(self, task_name, lines):
-        """Translate complex task methods."""
-        methods = self.method_groups.get(task_name, [])
-        if not methods:
-            return
-        
-        task_name_asp = task_name.replace('-', '_')
-        
-        lines.append(f"% --- Methoden für '{task_name}' ---")
-        lines.append("% Nicht-deterministische Auswahl einer der möglichen Methoden")
-        
-        # Generate choice rules
-        method_preds = [f"method_{m['name'].replace('-', '_')}" for m in methods]
-        for i, mpred in enumerate(method_preds):
-            others = [f"not {mp}(T)" for j, mp in enumerate(method_preds) if j != i]
-            if others:
-                lines.append(f"{mpred}(T) :- taskTBA({task_name_asp}, T), {', '.join(others)}.")
+        # Goal verification
+        rules.append("% Goal verification")
+        if self.data.htn_tasks:
+            last_task = self.data.htn_tasks[-1]
+            last_task_atom = self._fmt_atom(last_task)
+            
+            # plan_found :- causable(last_task, T_last_start, T_last_end), T_last_end >= T_last_start, <goal_conditions>.
+            
+            n_tasks = len(self.data.htn_tasks)
+            if n_tasks == 1:
+                start_var = "0"
+                end_var = "T1"
             else:
-                lines.append(f"{mpred}(T) :- taskTBA({task_name_asp}, T).")
-        
-        lines.append("")
-        
-        # Translate each method
-        for method in methods:
-            self._translate_single_method(method, task_name_asp, lines)
+                start_var = f"T{n_tasks-1}"
+                end_var = f"T{n_tasks}"
+            
+            body_parts = [f"causable({last_task_atom}, {start_var}, {end_var})", f"{end_var} >= {start_var}", f"time({end_var})"]
+            if start_var != "0":
+                 body_parts.append(f"time({start_var})")
 
-    def _translate_single_method(self, method, task_name_asp, lines):
-        """Translate one complex method."""
-        method_name = method['name']
-        method_pred = f"method_{method_name.replace('-', '_')}"
-        
-        lines.append(f"% Methode '{method_name}'")
-        
-        subtasks = method['subtasks']
-        preconditions = method['preconditions']
-        params = method['params']
-        
-        if not subtasks:
-            # Base case
-            lines.append(f"causable({task_name_asp}, T, T) :- {method_pred}(T).")
-            lines.append("")
-            return
-        
-        # Build condition list
-        conds = []
-        if params:
-            for v, t in params:
-                conds.append(f"{t}({self._fmt_term(v)})")
-        
-        for pre in preconditions:
-            if isinstance(pre, tuple) and pre[0] == 'not':
-                conds.append(f"not in_state({self._fmt_atom(pre[1])}, T)")
-            else:
-                conds.append(f"in_state({self._fmt_atom(pre)}, T)")
-        
-        cond_str = f", {', '.join(conds)}" if conds else ""
-        
-        if len(subtasks) == 1:
-            # Single subtask
-            subtask_atom = self._fmt_atom(subtasks[0])
-            lines.append(f"taskTBA({subtask_atom}, T) :-")
-            lines.append(f"    {method_pred}(T){cond_str}.")
+            # Add goal conditions
+            for cond in self.data.goal_state:
+                if isinstance(cond, tuple) and cond[0] == 'not':
+                    body_parts.append(f"not in_state({self._fmt_atom(cond[1])}, {end_var})")
+                else:
+                    body_parts.append(f"in_state({self._fmt_atom(cond)}, {end_var})")
             
-            # Check if recursive
-            if subtasks[0][0].replace('-', '_') != task_name_asp:
-                lines.append(f"causable({task_name_asp}, T, T2) :-")
-                lines.append(f"    {method_pred}(T){cond_str},")
-                lines.append(f"    causable({subtask_atom}, T, T2).")
-            
-        elif len(subtasks) == 2:
-            # Two subtasks
-            st1_atom = self._fmt_atom(subtasks[0])
-            st2_atom = self._fmt_atom(subtasks[1])
-            
-            lines.append(f"taskTBA({st1_atom}, T) :-")
-            lines.append(f"    {method_pred}(T){cond_str}.")
-            
-            lines.append(f"taskTBA({st2_atom}, T2) :-")
-            lines.append(f"    {method_pred}(T){cond_str},")
-            lines.append(f"    causable({st1_atom}, T, T2), T2 >= T.")
-            
-            lines.append(f"causable({task_name_asp}, T, T3) :-")
-            lines.append(f"    {method_pred}(T){cond_str},")
-            lines.append(f"    causable({st2_atom}, T2, T3), T3 >= T2, causable({st1_atom}, T, T2).")
-        
-        lines.append("")
+            rules.append(f"plan_found :- {', '.join(body_parts)}.")
+
+        return "\n".join(rules)
+
+    def export_primitives_list(self):
+        """Export list of primitive task names."""
+        return sorted(self.data.actions.keys())
 
 
-if __name__ == '__main__':
-    if len(sys.argv) != 4:
-        print("Usage: python hddl_to_lp_translator.py <domain.hddl> <problem.hddl> <output.lp>")
+def main():
+    """Main entry point."""
+    if len(sys.argv) == 5:
+        domain_out_file = sys.argv[3]
+        problem_out_file = sys.argv[4] 
+    elif len(sys.argv) == 3:
+        domain_out_file = "domain_output.lp"
+        problem_out_file = "problem_output.lp"
+    else:
+        print("Usage: python hddl_parser.py <domain.hddl> <problem.hddl> <domain_output.lp> <problem_output.lp>")
         sys.exit(1)
+
+    # Determine output directory for primitives.txt
+    output_dir = os.path.dirname(domain_out_file) if os.path.dirname(domain_out_file) else "."
+    primitives_out_file = os.path.join(output_dir, "primitives.txt")
 
     domain_file = sys.argv[1]
     problem_file = sys.argv[2]
-    output_file = sys.argv[3]
-
-    try:
-        parser = HDDLParser(domain_file, problem_file)
-        parser.parse()
+    
+    
+    
+    # Parse HDDL
+    parser = HDDLParser(domain_file, problem_file)
+    parser.parse()
+    
+    # Translate to ASP
+    translator = ASPTranslator(parser)
+    
+    # Translate and write domain
+    domain_code = translator.translate_domain()
+    with open(domain_out_file, 'w') as f:
+        f.write(domain_code)
         
-        translator = ASPTranslator(parser)
-        asp_program = translator.translate()
-        
-        with open(output_file, 'w', encoding='utf-8') as f:
-            f.write(asp_program)
-            
-        print(f"Successfully translated to {output_file}")
+    # Translate and write problem
+    problem_code = translator.translate_problem()
+    with open(problem_out_file, 'w') as f:
+        f.write(problem_code)
 
-    except Exception as e:
-        print(f"An error occurred: {e}")
-        import traceback
-        traceback.print_exc()
+    # Export primitives list
+    primitives = translator.export_primitives_list()
+    with open(primitives_out_file, 'w') as f:
+        for primitive in primitives:
+            f.write(f"{primitive}\n")
+
+    print(f"ASP domain translation written to: {domain_out_file}")
+    print(f"ASP problem translation written to: {problem_out_file}")
+    print(f"Primitives list written to: {primitives_out_file}")
+
+
+if __name__ == '__main__':
+    main()
