@@ -1,7 +1,0 @@
-construct
-drop
-fuse
-move
-pickup
-produce
-produce-without-demands
