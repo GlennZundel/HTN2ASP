@@ -791,30 +791,6 @@ class ASPTranslator:
                 rules.append(f"atom({pred_name.replace('-', '_')}).")
         rules.append("")
 
-        # Action declarations
-        rules.append("% Action declarations")
-        for action_name in sorted(self.data.actions.keys()):
-            action = self.data.actions[action_name]
-            # Build action atom with parameters
-            param_names = tuple(p[0] for p in action['params'])
-            action_atom_tuple = (action_name,) + param_names
-            action_atom = self._fmt_atom(action_atom_tuple)
-
-            # Get typing constraints for action parameters
-            typing_constraints = []
-            for param_name, param_type in action['params']:
-                if param_type != 'object':  # Skip default type
-                    formatted_param = self._fmt_term(param_name)
-                    typing_constraints.append(f"{param_type}({formatted_param})")
-
-            # Write action declaration with or without typing constraints
-            if typing_constraints:
-                body = ", ".join(typing_constraints)
-                rules.append(f"action({action_atom}) :- {body}.")
-            else:
-                rules.append(f"action({action_atom}).")
-        rules.append("")
-
         # Translate primitive tasks (actions)
         for action_name, action in self.data.actions.items():
             # Build action atom
@@ -1029,21 +1005,23 @@ class ASPTranslator:
                 method_param_names = [p[0] for p in method['params']]
                 typing_clauses = self._get_typing_constraints(method_param_names, method['params'])
 
-                # Build causable constraints for all subtasks
+                # Build causable constraint for LAST subtask only
                 causable_clauses = []
-                for i, subtask in enumerate(subtasks):
-                    subtask_atom = self._fmt_atom(subtask)
+                if subtasks:
+                    last_subtask = subtasks[-1]
+                    last_subtask_atom = self._fmt_atom(last_subtask)
 
-                    if i == 0:
+                    # Calculate time variables for last subtask
+                    n = len(subtasks)
+                    if n == 1:
                         start_var = self.time_var
                         end_var = self._get_time_var(2)
-                        causable_clauses.append(f"causable({subtask_atom}, {start_var}, {end_var})")
-                        causable_clauses.append(f"{end_var} >= {start_var}")
                     else:
-                        start_var = self._get_time_var(i+1)
-                        end_var = self._get_time_var(i+2)
-                        causable_clauses.append(f"causable({subtask_atom}, {start_var}, {end_var})")
-                        causable_clauses.append(f"{end_var} >= {start_var}")
+                        start_var = self._get_time_var(n)
+                        end_var = self._get_time_var(n+1)
+
+                    causable_clauses.append(f"causable({last_subtask_atom}, {start_var}, {end_var})")
+                    causable_clauses.append(f"{end_var} >= {start_var}")
 
                 # Combine all body parts
                 body_parts = [method_head] + check_clauses + typing_clauses + compound_task_typing + causable_clauses
