@@ -633,6 +633,16 @@ class ASPTranslator:
             return name
         return f"{name}({', '.join(params)})"
 
+    def _deduplicate_body_parts(self, body_parts):
+        """Remove duplicate entries while preserving order."""
+        seen = set()
+        result = []
+        for part in body_parts:
+            if part not in seen:
+                seen.add(part)
+                result.append(part)
+        return result
+
     def _get_time_var(self, n):
         """Generate time variable name using unique base."""
         if n <= 1:
@@ -703,7 +713,7 @@ class ASPTranslator:
         return typing_clauses
 
     def _fmt_method_head(self, method, time_var):
-        """Format method head with compound task atom, method parameters, and time."""
+        """Format method head with compound task atom and time (no extra method parameters)."""
         name = method['name'].replace('-', '_')
 
         # Format the full compound task atom (e.g., "do_put_on(C, S2)" or just "nop")
@@ -711,16 +721,11 @@ class ASPTranslator:
         if method['task']:
             task_atom = self._fmt_atom(method['task'])
 
-        # Format method parameters
-        params = [self._fmt_term(p[0]) for p in method['params']]
-        
         parts = []
         if task_atom:
             parts.append(task_atom)
-        if params:
-            parts.extend(params)
         parts.append(str(time_var))
-        
+
         return f"{name}({', '.join(parts)})"
 
     def _get_method_typing_constraints(self, method):
@@ -730,6 +735,16 @@ class ASPTranslator:
             if param_type != 'object':
                 constraints.append(f"{param_type.replace('-', '_')}({self._fmt_term(param_name)})")
         return constraints
+
+    def _get_method_condition(self, method):
+        """Get typing constraints for method (task params only) for choice rules."""
+        constraints = []
+
+        # Task parameter typing
+        if method['task']:
+            constraints.extend(self._get_task_typing_constraints(method['task']))
+
+        return self._deduplicate_body_parts(constraints)
 
     def translate_domain(self):
         """Translate domain to ASP."""
@@ -814,58 +829,25 @@ class ASPTranslator:
         rules.append("")
         
         for task_name, methods in self.method_groups.items():
+            # Get task atom from first method (all methods decompose the same task)
+            task_atom = self._fmt_atom(methods[0]['task'])
+
+            # Build choice alternatives for all methods that decompose this task
+            alternatives = []
             for method in methods:
                 method_head = self._fmt_method_head(method, self.time_var)
-                task_atom = self._fmt_atom(method['task'])
+                conditions = self._get_method_condition(method)
 
-                # Get typing constraints for the task parameters
-                task_typing = self._get_task_typing_constraints(method['task'])
+                if conditions:
+                    alt = f"{method_head} : {', '.join(conditions)}"
+                else:
+                    alt = method_head
+                alternatives.append(alt)
 
-                # Get typing constraints for the method parameters (all of them)
-                method_typing = self._get_typing_constraints(
-                    [p[0] for p in method['params']],
-                    method['params']
-                )
-
-                # Build body parts WITHOUT preconditions
-                body_parts = [f"taskTBA({task_atom}, {self.time_var})"]
-
-                # Collect method parameter names for checking
-                method_param_names = {p[0] for p in method['params']}
-
-                # Add typing constraints for task parameters that are NOT method parameters
-                # (to avoid unbound variables in the method head)
-                if method['task'] and len(method['task']) > 1:
-                    task_name = method['task'][0]
-                    task_params_in_call = method['task'][1:]
-                    # Get task definition to find types
-                    if task_name in self.data.tasks:
-                        task_param_defs = self.data.tasks[task_name]
-                        for i, param in enumerate(task_params_in_call):
-                            if param.startswith('?') and param not in method_param_names:
-                                # This task param is not a method param, needs typing
-                                if i < len(task_param_defs):
-                                    typ = task_param_defs[i][1]
-                                    if typ != 'object':
-                                        body_parts.append(f"{typ.replace('-', '_')}({self._fmt_term(param)})")
-
-                # Add typing constraints (merge task and method typing, remove duplicates)
-                all_typing = sorted(list(set(task_typing + method_typing)))
-                body_parts.extend(all_typing)
-
-                # Add negations for all other methods that decompose the same task
-                for other_method in methods:
-                    if other_method['name'] != method['name']:
-                        other_head = self._fmt_method_head(other_method, self.time_var)
-                        body_parts.append(f"not {other_head}")
-                        # Add typing constraints for parameters of the negated method
-                        other_typing = self._get_method_typing_constraints(other_method)
-                        body_parts.extend(other_typing)
-
-                # Simple rule without cardinality constraints
-                body = ", ".join(body_parts)
-                method_rule = f"{method_head} :- {body}."
-                rules.append(method_rule)
+            # Build choice rule with all alternatives
+            choice_body = "; ".join(alternatives)
+            rule = f"0 {{ {choice_body} }} 1 :- time({self.time_var}), taskTBA({task_atom}, {self.time_var})."
+            rules.append(rule)
             rules.append("")
         
         # Generate Checked State Rules (Definition 27)
@@ -1041,7 +1023,7 @@ class ASPTranslator:
 
                 # Combine all body parts
                 body_parts = [method_head] + check_clauses + typing_clauses + compound_task_typing + causable_clauses
-                body = ", ".join(body_parts)
+                body = ", ".join(self._deduplicate_body_parts(body_parts))
 
                 # Final time variable
                 final_time = self._get_time_var(len(subtasks)+1) if len(subtasks) != 0 else self.time_var
