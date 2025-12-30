@@ -671,7 +671,7 @@ class ASPTranslator:
         type_map = {}
         for var, typ in param_list:
             type_map[var] = typ
-        
+
         # Generate typing constraints
         typing_clauses = []
         for var in variables:
@@ -681,7 +681,39 @@ class ASPTranslator:
                 # Only add if type is not 'object' (default)
                 if typ != 'object':
                     typing_clauses.append(f"{typ.replace('-', '_')}({self._fmt_term(var)})")
-        
+
+        return typing_clauses
+
+    def _get_typing_from_predicate(self, atom, variables):
+        """Generate typing constraints for variables based on predicate definition.
+
+        Args:
+            atom: Tuple like ('at', '?c', '?p')
+            variables: Set of variable names to get typing for (e.g., {'?p'})
+
+        Returns:
+            List of typing constraints like ['place(P)']
+        """
+        if not atom or len(atom) < 2:
+            return []
+
+        pred_name = atom[0]
+        pred_args = atom[1:]
+
+        # Look up predicate definition
+        if pred_name not in self.data.predicates:
+            return []
+
+        pred_params = self.data.predicates[pred_name]
+
+        # Generate typing for requested variables
+        typing_clauses = []
+        for i, arg in enumerate(pred_args):
+            if arg in variables and i < len(pred_params):
+                param_name, param_type = pred_params[i]
+                if param_type != 'object':
+                    typing_clauses.append(f"{param_type.replace('-', '_')}({self._fmt_term(arg)})")
+
         return typing_clauses
 
     def _get_task_typing_constraints(self, task_atom):
@@ -827,27 +859,32 @@ class ASPTranslator:
         # Translate methods
         rules.append("% Method selection rules")
         rules.append("")
-        
+
         for task_name, methods in self.method_groups.items():
             # Get task atom from first method (all methods decompose the same task)
             task_atom = self._fmt_atom(methods[0]['task'])
 
-            # Build choice alternatives for all methods that decompose this task
-            alternatives = []
-            for method in methods:
+            # Generate one rule per method with negation of other methods
+            for i, method in enumerate(methods):
                 method_head = self._fmt_method_head(method, self.time_var)
                 conditions = self._get_method_condition(method)
 
-                if conditions:
-                    alt = f"{method_head} : {', '.join(conditions)}"
-                else:
-                    alt = method_head
-                alternatives.append(alt)
+                body_parts = [f"time({self.time_var})", f"taskTBA({task_atom}, {self.time_var})"]
+                body_parts.extend(conditions)
 
-            # Build choice rule with all alternatives
-            choice_body = "; ".join(alternatives)
-            rule = f"0 {{ {choice_body} }} 1 :- time({self.time_var}), taskTBA({task_atom}, {self.time_var})."
-            rules.append(rule)
+                # Add negation of all other methods WITH their typing constraints
+                for j, other_method in enumerate(methods):
+                    if i != j:
+                        # Add typing constraints for the negated method's variables
+                        other_conditions = self._get_method_condition(other_method)
+                        body_parts.extend(other_conditions)
+                        # Add the negation
+                        other_head = self._fmt_method_head(other_method, self.time_var)
+                        body_parts.append(f"not {other_head}")
+
+                # Deduplicate while preserving order
+                rule = f"{method_head} :- {', '.join(self._deduplicate_body_parts(body_parts))}."
+                rules.append(rule)
             rules.append("")
         
         # Generate Checked State Rules (Definition 27)
@@ -858,10 +895,17 @@ class ASPTranslator:
             for method in methods:
                 method_head = self._fmt_method_head(method, self.time_var)
                 method_term_name = method['name'].replace('-', '_')
-                
+
+                # Get variables from compound task head (these are "bound")
+                compound_task_vars = set()
+                if method['task']:
+                    for term in method['task'][1:]:  # Skip task name
+                        if term.startswith('?'):
+                            compound_task_vars.add(term)
+
                 for idx, precond in enumerate(method['preconditions']):
                     check_pred = f"checked_state_{method_term_name}_{idx}"
-                    
+
                     # Extract atom for the head
                     if isinstance(precond, tuple) and precond[0] == 'not':
                         raw_atom = precond[1]
@@ -869,39 +913,41 @@ class ASPTranslator:
                     else:
                         raw_atom = precond
                         is_negated = False
-                    
+
                     fmt_atom = self._fmt_atom(raw_atom)
-                    
+
                     # Head: checked_state_...(Atom, T)
                     check_atom_head = f"{check_pred}({fmt_atom}, {self.time_var})"
-                    
-                    # Generate the rule: checked_state(...) :- method(...), in_state(...)
-                    check_body = [method_head]
-                    
-                    if is_negated:
-                        check_body.append(f"not in_state({fmt_atom}, {self.time_var})")
-                    else:
-                        check_body.append(f"in_state({fmt_atom}, {self.time_var})")
-                    
-                    # Typing logic:
-                    # Method head binds method params. 
-                    # We need typing for local variables in the precondition that are NOT method params.
-                    # 1. Get vars in this precond (formatted)
+
+                    # Get variables from precondition
                     raw_vars = self._get_variables_from_conditions([precond])
-                    precond_vars = {self._fmt_term(v) for v in raw_vars}
-                    
-                    # 2. Get vars bound by method head (formatted)
-                    method_param_names = {self._fmt_term(p[0]) for p in method['params']}
-                    
-                    # 3. Diff
-                    vars_to_type = precond_vars - method_param_names
-                    
-                    # 4. Generate typing (we rely on get_typing_constraints which needs original param list logic)
-                    # Since these are local vars, we don't have a lookup list. 
-                    # Usually, in_state binds them. If strict typing is needed, we'd need a global var-type map.
-                    # For now, we assume in_state is sufficient for binding local vars.
-                    
-                    rules.append(f"{check_atom_head} :- {', '.join(check_body)}.")
+
+                    # Identify unbound variables (not in compound task head)
+                    unbound_vars = raw_vars - compound_task_vars
+
+                    if not unbound_vars:
+                        # Case 1: All variables bound - normal rule
+                        check_body = [method_head]
+                        if is_negated:
+                            check_body.append(f"not in_state({fmt_atom}, {self.time_var})")
+                        else:
+                            check_body.append(f"in_state({fmt_atom}, {self.time_var})")
+                        rules.append(f"{check_atom_head} :- {', '.join(check_body)}.")
+                    else:
+                        # Case 2: Unbound variables - choice rule
+                        # Get typing constraints for unbound variables from predicate definition
+                        typing_constraints = self._get_typing_from_predicate(raw_atom, unbound_vars)
+
+                        # in_state or not in_state
+                        if is_negated:
+                            state_check = f"not in_state({fmt_atom}, {self.time_var})"
+                        else:
+                            state_check = f"in_state({fmt_atom}, {self.time_var})"
+
+                        # Build choice rule: 1 { head : typing, state_check } 1 :- method_head.
+                        condition_parts = typing_constraints + [state_check]
+                        choice_body = f"{check_atom_head} : {', '.join(condition_parts)}"
+                        rules.append(f"1 {{ {choice_body} }} 1 :- {method_head}.")
         rules.append("")
 
         # Translate subtasks for each method
@@ -957,17 +1003,13 @@ class ASPTranslator:
                     unique_task_typing = [tc for tc in task_typing_clauses if tc not in existing_constraints]
                     # We already added task_typing_clauses to body_parts
                     
+                    # Add time binding for the subtask's time variable
+                    body_parts.insert(0, f"time({time_var})")
+
                     body = ", ".join(body_parts)
 
-                    subtask_name = subtask[0]
-                    is_primitive = subtask_name in self.data.actions
-
-                    if is_primitive:
-                        # Cardinality constraint for primitive tasks
-                        subtask_rule = f"0 {{ taskTBA({subtask_atom}, {time_var}) : {body} }} 1 :- time({self.time_var})."
-                    else:
-                        # Regular rule for compound tasks
-                        subtask_rule = f"taskTBA({subtask_atom}, {time_var}) :- {body}."
+                    # Regular rule for all subtasks (no choice rules)
+                    subtask_rule = f"taskTBA({subtask_atom}, {time_var}) :- {body}."
 
                     rules.append(subtask_rule)
                 
