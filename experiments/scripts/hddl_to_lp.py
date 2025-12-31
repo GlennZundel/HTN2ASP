@@ -764,21 +764,16 @@ class ASPTranslator:
                 fmt_atom = self._fmt_atom(raw_atom)
                 check_clauses.append(f"{check_pred}({fmt_atom}, {self.time_var})")
         else:
-            # Synthetic checked_state for typing
+            # Synthetic checked_state for typing - use ALL method params
             check_pred = f"checked_state_{method_term_name}_typing"
-            task_vars = []
-            if method['task']:
-                for term in method['task'][1:]:
-                    if term.startswith('?'):
-                        task_vars.append(term)
-            fmt_vars = [self._fmt_term(v) for v in task_vars]
+            fmt_vars = [self._fmt_term(p[0]) for p in method['params']]
             head_args = fmt_vars + [self.time_var]
             check_clauses.append(f"{check_pred}({', '.join(head_args)})")
 
         return check_clauses
 
     def _fmt_method_head(self, method, time_var):
-        """Format method head with compound task atom and time (no extra method parameters)."""
+        """Format method head with compound task atom, method-only params, and time."""
         name = method['name'].replace('-', '_')
 
         # Format the full compound task atom (e.g., "do_put_on(C, S2)" or just "nop")
@@ -786,9 +781,23 @@ class ASPTranslator:
         if method['task']:
             task_atom = self._fmt_atom(method['task'])
 
+        # Get task variables to exclude from method-only params
+        task_vars = set()
+        if method['task']:
+            for term in method['task'][1:]:
+                if term.startswith('?'):
+                    task_vars.add(term)
+
+        # Get method-only params (not in task)
+        method_only_params = []
+        for param_name, _ in method['params']:
+            if param_name not in task_vars:
+                method_only_params.append(self._fmt_term(param_name))
+
         parts = []
         if task_atom:
             parts.append(task_atom)
+        parts.extend(method_only_params)
         parts.append(str(time_var))
 
         return f"{name}({', '.join(parts)})"
@@ -898,12 +907,29 @@ class ASPTranslator:
             task_atom = self._fmt_atom(methods[0]['task'])
 
             if len(methods) == 1:
-                # Only one method - simple rule without choice
                 method = methods[0]
                 method_head = self._fmt_method_head(method, self.time_var)
                 typing = self._get_method_typing_constraints(method)
-                body_parts = [f"time({self.time_var})", f"taskTBA({task_atom}, {self.time_var})"] + typing
-                rule = f"{method_head} :- {', '.join(body_parts)}."
+
+                # Check if method has own params (not in task)
+                task_vars = set()
+                if method['task']:
+                    for term in method['task'][1:]:
+                        if term.startswith('?'):
+                            task_vars.add(term)
+                has_own_params = any(p[0] not in task_vars for p in method['params'])
+
+                if has_own_params:
+                    # Choice rule needed to bind extra params
+                    if typing:
+                        alt = f"{method_head} : {', '.join(typing)}"
+                    else:
+                        alt = method_head
+                    rule = f"1 {{ {alt} }} 1 :- time({self.time_var}), taskTBA({task_atom}, {self.time_var})."
+                else:
+                    # Simple rule - all params bound by taskTBA
+                    body_parts = [f"time({self.time_var})", f"taskTBA({task_atom}, {self.time_var})"] + typing
+                    rule = f"{method_head} :- {', '.join(body_parts)}."
                 rules.append(rule)
             else:
                 # Multiple methods - build choice rule
@@ -990,22 +1016,15 @@ class ASPTranslator:
                 if not method['preconditions']:
                     check_pred = f"checked_state_{method_term_name}_typing"
 
-                    # Variables from compound task head
-                    task_vars = []
-                    if method['task']:
-                        for term in method['task'][1:]:
-                            if term.startswith('?'):
-                                task_vars.append(term)
+                    # Use ALL method params for synthetic checked_state
+                    fmt_vars = [self._fmt_term(p[0]) for p in method['params']]
 
-                    # Formatted variables for head
-                    fmt_vars = [self._fmt_term(v) for v in task_vars]
-
-                    # Head: checked_state_..._typing(X, Y, T)
+                    # Head: checked_state_..._typing(X, Y, ..., T)
                     head_args = fmt_vars + [self.time_var]
                     check_atom_head = f"{check_pred}({', '.join(head_args)})"
 
-                    # Typing constraints from compound task
-                    typing_constraints = self._get_task_typing_constraints(method['task'])
+                    # Typing constraints from ALL method params
+                    typing_constraints = self._get_method_typing_constraints(method)
 
                     # Choice rule: 1 { head : typing } 1 :- method_head.
                     if typing_constraints:
