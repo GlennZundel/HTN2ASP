@@ -533,12 +533,20 @@ class ASPTranslator:
         for t in self.data.types: vars.add(self._fmt_term(t))
         return vars
 
-    def _determine_unique_var(self, base, forbidden):
-        """Hängt den Basisnamen an sich selbst an, bis er eindeutig ist."""
+    def _determine_unique_var(self, base, forbidden, max_suffix=20):
+        """Find unique variable name that doesn't collide with domain vars.
+
+        Checks base and numbered variants (base2, base3, ..., base{max_suffix})
+        to ensure no collisions with forbidden names.
+        """
         candidate = base
-        while candidate in forbidden:
+        while True:
+            # Check base and all numbered variants
+            variants = [candidate] + [f"{candidate}{i}" for i in range(2, max_suffix + 1)]
+            if not any(v in forbidden for v in variants):
+                return candidate
+            # Try next candidate by appending base
             candidate += base
-        return candidate
 
     def _preprocess_actions_with_preconditions(self):
         """
