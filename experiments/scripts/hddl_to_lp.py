@@ -897,22 +897,31 @@ class ASPTranslator:
             # Get task atom from first method (all methods decompose the same task)
             task_atom = self._fmt_atom(methods[0]['task'])
 
-            # Build choice alternatives for all methods that decompose this task
-            alternatives = []
-            for method in methods:
+            if len(methods) == 1:
+                # Only one method - simple rule without choice
+                method = methods[0]
                 method_head = self._fmt_method_head(method, self.time_var)
-                conditions = self._get_method_condition(method)
+                typing = self._get_method_typing_constraints(method)
+                body_parts = [f"time({self.time_var})", f"taskTBA({task_atom}, {self.time_var})"] + typing
+                rule = f"{method_head} :- {', '.join(body_parts)}."
+                rules.append(rule)
+            else:
+                # Multiple methods - build choice rule
+                alternatives = []
+                for method in methods:
+                    method_head = self._fmt_method_head(method, self.time_var)
+                    conditions = self._get_method_typing_constraints(method)
 
-                if conditions:
-                    alt = f"{method_head} : {', '.join(conditions)}"
-                else:
-                    alt = method_head
-                alternatives.append(alt)
+                    if conditions:
+                        alt = f"{method_head} : {', '.join(conditions)}"
+                    else:
+                        alt = method_head
+                    alternatives.append(alt)
 
-            # Build choice rule with all alternatives
-            choice_body = "; ".join(alternatives)
-            rule = f"1 {{ {choice_body} }} 1 :- time({self.time_var}), taskTBA({task_atom}, {self.time_var})."
-            rules.append(rule)
+                choice_body = "; ".join(alternatives)
+                rule = f"1 {{ {choice_body} }} 1 :- time({self.time_var}), taskTBA({task_atom}, {self.time_var})."
+                rules.append(rule)
+
             rules.append("")
         
         # Generate Checked State Rules (Definition 27)
