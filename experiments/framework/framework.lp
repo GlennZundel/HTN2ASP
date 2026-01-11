@@ -1,11 +1,10 @@
-time(0..100).
+time(0..25).
 
 in_state(A, T+1) :-
     time(T),
+    atom(A),
     in_state(A, T),
     not out_state(A, T+1).
-
-0 { taskTBA(A, T) : action(A) } 1 :- time(T).
 
 :- not plan_found.
 

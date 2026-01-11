@@ -49,7 +49,20 @@ exp = Experiment(environment=env)
 # Define benchmark suite: (domain_name, problem_file)
 SUITE = [
     ("depots", "problem01.hddl"),
-    ("robotDomain", "problem02.hddl"),
+    ("depots", "problem05.hddl"),
+    ("depots", "problem10.hddl"),
+    ("factories-simple", "problem01.hddl"),
+    ("factories-simple", "problem05.hddl"),
+    ("factories-simple", "problem10.hddl"),
+    ("robot", "problem01.hddl"),
+    ("robot", "problem05.hddl"),
+    ("robot", "problem10.hddl"),
+    ("towers", "problem01.hddl"),
+    ("towers", "problem05.hddl"),
+    ("towers", "problem10.hddl"),
+    ("transport", "problem01.hddl"),
+    ("transport", "problem05.hddl"),
+    ("transport", "problem10.hddl"),
     ]
 
 # ============================================================================
@@ -121,7 +134,7 @@ for domain, problem in SUITE:
             "clingo_output.txt",     # arg7: clingo raw output
             "orderedtasklist.txt"    # arg8: final task list
         ],
-        time_limit=3600,             # 30 minutes
+        time_limit=36000,             # 30 minutes
         memory_limit=8100            # 8GB for clingo
     )
 

@@ -345,10 +345,18 @@ class HDDLParser:
                 
                 # Extract subtasks
                 subtasks = []
-                subtasks_match = re.search(r':(?:ordered-tasks|ordered-subtasks)\s*\(', method_block, re.IGNORECASE)
+                subtasks_match = re.search(r':(?:ordered-tasks|ordered-subtasks|subtasks|tasks)\s*\(', method_block, re.IGNORECASE)
                 if subtasks_match:
-                    keyword = ':ordered-tasks' if ':ordered-tasks' in method_block.lower() else ':ordered-subtasks'
-                    subtasks_start = method_block.lower().find(keyword.lower(), 0, len(method_block))
+                    block_lower = method_block.lower()
+                    if ':ordered-tasks' in block_lower:
+                        keyword = ':ordered-tasks'
+                    elif ':ordered-subtasks' in block_lower:
+                        keyword = ':ordered-subtasks'
+                    elif ':subtasks' in block_lower:
+                        keyword = ':subtasks'
+                    else:
+                        keyword = ':tasks'
+                    subtasks_start = block_lower.find(keyword, 0, len(method_block))
                     subtasks_block, _ = self._extract_balanced(method_block, subtasks_start + len(keyword))
                     if subtasks_block:
                         # Parse subtasks
@@ -836,6 +844,7 @@ class ASPTranslator:
         rules = []
 
         # Header comment
+        rules.append("#program base.")
         rules.append("% Primitive tasks (actions)")
         rules.append("")
 
@@ -872,6 +881,9 @@ class ASPTranslator:
                 # No parameters: atom(pred).
                 rules.append(f"atom({pred_name.replace('-', '_')}).")
         rules.append("")
+
+        #here starts the program step part that gets incremented
+        rules.append("#program step(t)")
 
         # Translate primitive tasks (actions)
         for action_name, action in self.data.actions.items():
@@ -974,6 +986,12 @@ class ASPTranslator:
                         if term.startswith('?'):
                             compound_task_vars.add(term)
 
+                # Get variables from method parameters (also "bound")
+                method_param_vars = {p[0] for p in method['params']}
+
+                # All bound variables = task params + method params
+                bound_vars = compound_task_vars.union(method_param_vars)
+
                 for idx, precond in enumerate(method['preconditions']):
                     check_pred = f"checked_state_{method_term_name}_{idx}"
 
@@ -993,8 +1011,8 @@ class ASPTranslator:
                     # Get variables from precondition
                     raw_vars = self._get_variables_from_conditions([precond])
 
-                    # Identify unbound variables (not in compound task head)
-                    unbound_vars = raw_vars - compound_task_vars
+                    # Identify unbound variables (not in task head or method params)
+                    unbound_vars = raw_vars - bound_vars
 
                     if not unbound_vars:
                         # Case 1: All variables bound - normal rule
