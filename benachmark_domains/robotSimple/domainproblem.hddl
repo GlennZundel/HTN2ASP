@@ -1,0 +1,58 @@
+(define (domain robot)
+  (:requirements :hierarchy :typing :method-preconditions)
+
+  (:types PACKAGE ROOM ROOMDOOR)
+
+  (:predicates
+    (armempty)
+    (rloc ?loc - ROOM)
+    (in ?obj - PACKAGE ?loc - ROOM)
+    (holding ?obj - PACKAGE)
+    (door ?loc1 - ROOM ?loc2 - ROOM ?d - ROOMDOOR)
+    (goal_in ?obj - PACKAGE ?loc - ROOM))
+
+  (:task achieve-goals :parameters ())
+  (:task release :parameters ())
+
+  (:method release-putdown
+    :parameters (?loc - ROOM ?obj - PACKAGE)
+    :task (release)
+    :precondition (and (rloc ?loc) (holding ?obj) (goal_in ?obj ?loc))
+    :ordered-subtasks (and (putdown ?obj ?loc) (achieve-goals)))
+
+  (:method release-move
+    :parameters (?from - ROOM ?to - ROOM ?d - ROOMDOOR)
+    :task (release)
+    :ordered-subtasks (and (move ?from ?to ?d) (release)))
+
+  (:method achieve-goals-pickup
+    :parameters (?loc - ROOM ?obj - PACKAGE)
+    :task (achieve-goals)
+    :precondition (and (rloc ?loc) (in ?obj ?loc) (not (goal_in ?obj ?loc)))
+    :ordered-subtasks (and (pickup ?obj ?loc) (release)))
+
+  (:method achieve-goals-move
+    :parameters (?from - ROOM ?to - ROOM ?d - ROOMDOOR)
+    :task (achieve-goals)
+    :ordered-subtasks (and (move ?from ?to ?d) (achieve-goals)))
+
+  (:method finished
+    :parameters ()
+    :task (achieve-goals)
+    :ordered-subtasks (and))
+
+  ; === Primitive Actions ===
+  (:action pickup
+    :parameters (?obj - PACKAGE ?loc - ROOM)
+    :precondition (and (armempty) (rloc ?loc) (in ?obj ?loc))
+    :effect (and (not (in ?obj ?loc)) (not (armempty)) (holding ?obj)))
+
+  (:action putdown
+    :parameters (?obj - PACKAGE ?loc - ROOM)
+    :precondition (and (rloc ?loc) (holding ?obj) (goal_in ?obj ?loc))
+    :effect (and (not (holding ?obj)) (armempty) (in ?obj ?loc)))
+
+  (:action move
+    :parameters (?from - ROOM ?to - ROOM ?d - ROOMDOOR)
+    :precondition (and (rloc ?from) (door ?from ?to ?d))
+    :effect (and (rloc ?to) (not (rloc ?from)))))

@@ -1,104 +1,65 @@
 import subprocess
 import sys
 import os
-import tempfile
+import clingo
 
 # Example usage:
 # python3 run_pipeline.py domain.hddl problem.hddl framework.lp domain_output.lp problem_output.lp primitives.txt clingo_output.txt orderedtasklist.txt
 
 
-def create_temp_framework(time_bound):
-    """Create temporary framework file with given time bound.
+def run_clingo_incremental(domain_file, problem_file, framework_file, output_file, max_time=300):
+    """Run Clingo with incremental solving using the Python API.
 
     Args:
-        time_bound: Maximum time step (creates time(0..time_bound))
+        domain_file: Translated ASP domain file
+        problem_file: Translated ASP problem file
+        framework_file: Framework file with #program directives
+        output_file: Output file for result
+        max_time: Maximum time steps
 
     Returns:
-        Path to the temporary framework file
+        Tuple (time_bound, success, model_str)
     """
-    content = f"""time(0..{time_bound}).
+    ctl = clingo.Control()
 
-in_state(A, T+1) :-
-    time(T),
-    in_state(A, T),
-    atom(A),
-    not out_state(A, T+1).
+    # Load all files
+    ctl.load(domain_file)
+    ctl.load(problem_file)
+    ctl.load(framework_file)
 
-:- not plan_found.
+    # 1. Ground base (initial state, types, objects, time(0))
+    ctl.ground([("base", [])])
 
-#show taskTBA/2.
-"""
-    # Create temp file that persists until explicitly deleted
-    fd, temp_path = tempfile.mkstemp(suffix='.lp', prefix=f'framework_t{time_bound}_')
-    with os.fdopen(fd, 'w') as f:
-        f.write(content)
-    return temp_path
+    for t in range(0, max_time + 1):
+        # 2. Ground step for current time step
+        ctl.ground([("step", [clingo.Number(t)])])
 
+        # 3. Ground check block
+        ctl.ground([("check", [clingo.Number(t)])])
 
-def run_clingo_iterative(clingo_inputs, output_file, max_time=300, start_time=1, step=1):
-    """Run Clingo with iterative deepening on time bound.
+        # 4. Activate external query(t)
+        ctl.assign_external(clingo.Function("query", [clingo.Number(t)]), True)
 
-    Args:
-        clingo_inputs: List of input files (domain, problem) - framework will be replaced
-        output_file: Path to write clingo output
-        max_time: Maximum time bound to try
-        start_time: Starting time bound
-        step: Increment for each iteration
+        # 5. Solve
+        result = []
+        with ctl.solve(yield_=True) as handle:
+            for model in handle:
+                result = [str(atom) for atom in model.symbols(shown=True)]
+            solve_result = handle.get()
 
-    Returns:
-        Tuple of (time_bound, success, returncode)
-    """
-    # Filter out any existing framework file
-    inputs_without_framework = [f for f in clingo_inputs if 'framework' not in f.lower()]
+        if solve_result.satisfiable:
+            # Solution found
+            model_str = "\n".join(sorted(result))
+            with open(output_file, 'w', encoding='utf-8') as f:
+                f.write(model_str)
+            return t, True, model_str
 
-    temp_framework = None
+        # 6. Deactivate external for next iteration
+        ctl.assign_external(clingo.Function("query", [clingo.Number(t)]), False)
 
-    try:
-        for time_bound in range(start_time, max_time + 1, step):
-            # Clean up previous temp file
-            if temp_framework and os.path.exists(temp_framework):
-                os.remove(temp_framework)
+        print(f"t={t}: UNSAT, versuche t={t+1}...")
 
-            # Create new framework with current time bound
-            temp_framework = create_temp_framework(time_bound)
-
-            # Run clingo
-            current_inputs = inputs_without_framework + [temp_framework]
-            result = subprocess.run(
-                ["clingo"] + current_inputs,
-                capture_output=True,
-                text=True
-            )
-
-            # Clingo Return Codes:
-            # 10 = SAT (satisfiable)
-            # 20 = UNSAT (unsatisfiable)
-            # 30 = SAT + optimum proven
-
-            if result.returncode in [10, 30]:
-                # Solution found!
-                with open(output_file, 'w', encoding='utf-8') as f:
-                    f.write(result.stdout)
-                print(f"Lösung gefunden mit time_bound={time_bound}!")
-                return time_bound, True, result.returncode
-
-            if result.returncode == 20:
-                # UNSAT - try next time bound
-                print(f"time_bound={time_bound}: UNSAT, versuche {time_bound + step}...")
-            else:
-                # Other error
-                print(f"time_bound={time_bound}: Clingo returncode={result.returncode}")
-                if result.stderr:
-                    print(f"  Fehler: {result.stderr}")
-
-        # Max time reached without solution
-        print(f"Keine Lösung gefunden bis time_bound={max_time}")
-        return max_time, False, 20
-
-    finally:
-        # Clean up temp file
-        if temp_framework and os.path.exists(temp_framework):
-            os.remove(temp_framework)
+    return max_time, False, None
 
 
 def run_workflow(domain_file, problem_file, framework_file,
@@ -137,30 +98,30 @@ def run_workflow(domain_file, problem_file, framework_file,
         print(f"Fehler: Script '{hddl_to_lp_script}' nicht gefunden.")
         return False
 
-    print("\n--- 2. Starte Clingo (Iterative Deepening) ---")
+    print("\n--- 2. Starte Clingo (Inkrementelles Solving) ---")
 
     # Check if required files exist
-    clingo_inputs = [problem_output, domain_output]
-    for f in clingo_inputs:
+    required_files = [domain_output, problem_output, framework_file]
+    for f in required_files:
         if not os.path.exists(f):
             print(f"Fehler: Die Datei '{f}' wurde nicht gefunden.")
             return False
 
     try:
-        time_bound, success, returncode = run_clingo_iterative(
-            clingo_inputs=clingo_inputs,
+        time_bound, success, model_str = run_clingo_incremental(
+            domain_file=domain_output,
+            problem_file=problem_output,
+            framework_file=framework_file,
             output_file=clingo_output,
-            max_time=300,
-            start_time=5,
-            step=1
+            max_time=300
         )
 
         if not success:
             print(f"Clingo: Keine Lösung gefunden (max_time={time_bound})")
         else:
-            print(f"Clingo fertig. Optimale Planlänge: {time_bound}. Ergebnis in '{clingo_output}' gespeichert.")
-    except FileNotFoundError:
-        print("Fehler: 'clingo' wurde nicht gefunden. Ist es installiert und im PATH?")
+            print(f"Clingo fertig. Plan gefunden bei t={time_bound}. Ergebnis in '{clingo_output}' gespeichert.")
+    except Exception as e:
+        print(f"Fehler bei Clingo: {e}")
         return False
 
     print("\n--- 3. Verarbeite Ergebnisse (parseResult) ---")

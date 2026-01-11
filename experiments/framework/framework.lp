@@ -1,11 +1,13 @@
-time(0..25).
+#program step(t).
+time(t).
 
-in_state(A, T+1) :-
-    time(T),
+in_state(A, t) :-
     atom(A),
-    in_state(A, T),
-    not out_state(A, T+1).
+    in_state(A, t-1),
+    not out_state(A, t).
 
-:- not plan_found.
+#program check(t).
+#external query(t).
+:- query(t), not plan_found(t).
 
 #show taskTBA/2.
