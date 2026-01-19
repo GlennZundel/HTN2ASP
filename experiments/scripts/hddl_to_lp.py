@@ -1050,16 +1050,9 @@ class ASPTranslator:
                     head_args = fmt_vars + ["t"]
                     check_atom_head = f"{check_pred}({', '.join(head_args)})"
 
-                    # Typing constraints from ALL method params
-                    typing_constraints = self._get_method_typing_constraints(method)
-
-                    # Choice rule: 1 { head : typing } 1 :- method_head.
-                    if typing_constraints:
-                        choice_body = f"{check_atom_head} : {', '.join(typing_constraints)}"
-                        rules.append(f"1 {{ {choice_body} }} 1 :- {method_head}.")
-                    else:
-                        # No typing constraints -> simple rule
-                        rules.append(f"{check_atom_head} :- {method_head}.")
+                    # Synthetic checked_state always has all variables bound (they're all method params in method_head)
+                    # Therefore, always use a simple rule, not a choice rule
+                    rules.append(f"{check_atom_head} :- {method_head}.")
         rules.append("")
 
         # Translate subtasks for each method

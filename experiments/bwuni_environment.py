@@ -13,8 +13,9 @@ class BWUniEnvironment(BaselSlurmEnvironment):
     Environment for bwUniCluster with optimized memory and email settings.
 
     Configuration:
-    - Memory per CPU: 8100M (8000M for clingo + 100M buffer for Python scripts)
-    - Default time limit: 1800s (30 minutes)
+    - CPUs per task: 1 (one core per run)
+    - Memory per CPU: 8000M (8GB)
+    - Time limit: 30 minutes per task
     - Email notifications on job completion/failure
     - Default partition: cpu_il
     """
@@ -29,12 +30,12 @@ class BWUniEnvironment(BaselSlurmEnvironment):
             partition: SLURM partition to use (default: "cpu_il")
             **kwargs: Additional arguments passed to BaselSlurmEnvironment
         """
-        # Configure SLURM email notifications and time limit
-        # bwUniCluster "single" partition max: 72h, we use 2h per task
+        # Configure SLURM options: 1 CPU, 8GB RAM, 30 min timeout
         extra_options = (
             f"#SBATCH --mail-type=END,FAIL\n"
             f"#SBATCH --mail-user={email}\n"
-            f"#SBATCH --time=02:00:00"
+            f"#SBATCH --time=02:00:00\n"
+            f"#SBATCH --cpus-per-task=1"
         )
 
         # Initialize base environment with cluster-specific settings
@@ -43,6 +44,7 @@ class BWUniEnvironment(BaselSlurmEnvironment):
             partition=partition,
             extra_options=extra_options,
             time_limit_per_task="2:00:00",
+            cpus_per_task=1,
             **kwargs
         )
 

@@ -3,11 +3,14 @@ import sys
 import os
 import clingo
 
+# SLURM Job-ID erfassen (für sacct-Abfrage nach dem Experiment)
+SLURM_JOB_ID = os.environ.get('SLURM_JOB_ID', 'local')
+
 # Example usage:
 # python3 run_pipeline.py domain.hddl problem.hddl framework.lp domain_output.lp problem_output.lp primitives.txt clingo_output.txt orderedtasklist.txt
 
 
-def run_clingo_incremental(domain_file, problem_file, framework_file, output_file, max_time=300):
+def run_clingo_incremental(domain_file, problem_file, framework_file, output_file, run_with_stats, max_time=300):
     """Run Clingo with incremental solving using the Python API.
 
     Args:
@@ -15,12 +18,13 @@ def run_clingo_incremental(domain_file, problem_file, framework_file, output_fil
         problem_file: Translated ASP problem file
         framework_file: Framework file with #program directives
         output_file: Output file for result
+        run_with_stats: Output statistics for each timestep
         max_time: Maximum time steps
 
     Returns:
         Tuple (time_bound, success, model_str)
     """
-    ctl = clingo.Control()
+    ctl = clingo.Control(["--configuration=handy"])
 
     # Load all files
     ctl.load(domain_file)
@@ -46,7 +50,13 @@ def run_clingo_incremental(domain_file, problem_file, framework_file, output_fil
             for model in handle:
                 result = [str(atom) for atom in model.symbols(shown=True)]
             solve_result = handle.get()
-
+            if run_with_stats:
+                stats = ctl.statistics
+                atoms = stats['problem']['lp']['atoms']
+                rules = stats['problem']['lp']['rules']
+                totalTime = stats['summary']['times']['total']
+                cpuTime = stats['summary']['times']['cpu']
+                print(f"atoms: {atoms}, rules: {rules}, totalTime: {totalTime}, cpuTime: {cpuTime}")
         if solve_result.satisfiable:
             # Solution found
             model_str = "\n".join(sorted(result))
@@ -87,7 +97,7 @@ def run_workflow(domain_file, problem_file, framework_file,
     print("--- 1. Starte Übersetzung (hddl_to_lp) ---")
     try:
         subprocess.run(
-            ["py", hddl_to_lp_script, domain_file, problem_file,
+            ["python3", hddl_to_lp_script, domain_file, problem_file,
              domain_output, problem_output, primitives_output],
             check=True
         )
@@ -113,6 +123,7 @@ def run_workflow(domain_file, problem_file, framework_file,
             problem_file=problem_output,
             framework_file=framework_file,
             output_file=clingo_output,
+            run_with_stats=False,
             max_time=300
         )
 
@@ -127,7 +138,7 @@ def run_workflow(domain_file, problem_file, framework_file,
     print("\n--- 3. Verarbeite Ergebnisse (parseResult) ---")
     try:
         subprocess.run(
-            ["py", parse_result_script, primitives_output,
+            ["python3", parse_result_script, primitives_output,
              clingo_output, tasklist_output],
             check=True
         )
@@ -155,10 +166,13 @@ if __name__ == "__main__":
         print("  <clingo_output>      - Output file for clingo results")
         print("  <tasklist_output>    - Output file for ordered task list")
         print("\nExample:")
-        print("  py run_pipeline.py domain.hddl problem.hddl framework.lp \\")
+        print("  python3 run_pipeline.py domain.hddl problem.hddl framework.lp \\")
         print("                          domain_out.lp problem_out.lp primitives.txt \\")
         print("                          clingo_out.txt tasklist.txt")
         sys.exit(1)
+
+    with open('slurm_info.txt', 'w') as f:
+        f.write(f"SLURM_JOB_ID={SLURM_JOB_ID}\n")
 
     success = run_workflow(
         domain_file=sys.argv[1],
