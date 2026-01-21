@@ -124,7 +124,7 @@ def run_workflow(domain_file, problem_file, framework_file,
             framework_file=framework_file,
             output_file=clingo_output,
             run_with_stats=False,
-            max_time=300
+            max_time=1500
         )
 
         if not success:

@@ -847,30 +847,6 @@ class ASPTranslator:
                 rules.append(f"{supertype_fmt}({self.gen_var}) :- {subtype_fmt}({self.gen_var}).")
         rules.append("")
 
-        # Atom definitions for predicates
-        rules.append("% Atom definitions")
-        for pred_name, params in self.data.predicates.items():
-            # Build predicate atom
-            if params:
-                # With parameters: atom(pred(X, Y)) :- type1(X), type2(Y).
-                param_vars = [self._fmt_term(p[0]) for p in params]
-                atom_str = f"{pred_name.replace('-', '_')}({', '.join(param_vars)})"
-
-                # Build typing constraints
-                typing_constraints = []
-                for param_name, param_type in params:
-                    if param_type != 'object':
-                        typing_constraints.append(f"{param_type.replace('-', '_')}({self._fmt_term(param_name)})")
-
-                if typing_constraints:
-                    rules.append(f"atom({atom_str}) :- {', '.join(typing_constraints)}.")
-                else:
-                    rules.append(f"atom({atom_str}).")
-            else:
-                # No parameters: atom(pred).
-                rules.append(f"atom({pred_name.replace('-', '_')}).")
-        rules.append("")
-
         #here starts the program step part that gets incremented
         rules.append("#program step(t).")
 

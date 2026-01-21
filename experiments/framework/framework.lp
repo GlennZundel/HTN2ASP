@@ -2,7 +2,6 @@
 time(t).
 
 in_state(A, t) :-
-    atom(A),
     in_state(A, t-1),
     not out_state(A, t).
 
