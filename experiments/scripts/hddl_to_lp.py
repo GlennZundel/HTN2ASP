@@ -760,34 +760,13 @@ class ASPTranslator:
         
         return typing_clauses
 
-    def _build_check_clauses(self, method, hasSubtasks):
-        """Build checked_state clauses for a method.
-
-        For methods with preconditions: returns clauses referencing checked_state for each precondition.
-        For methods without preconditions: returns a clause referencing a synthetic typing checked_state.
-        """
-        method_term_name = method['name'].replace('-', '_')
-        check_clauses = []
-
-        if method['preconditions']:
-            # Normal checked_state for each precondition
-            for idx, precond in enumerate(method['preconditions']):
-                check_pred = f"checked_state_{method_term_name}_{idx}"
-                if isinstance(precond, tuple) and precond[0] == 'not':
-                    raw_atom = precond[1]
-                else:
-                    raw_atom = precond
-                fmt_atom = self._fmt_atom(raw_atom)
-                temp_var = f"{check_pred}({fmt_atom}, {self.time_var})" if hasSubtasks else f"{check_pred}({fmt_atom}, t)"
-                check_clauses.append(temp_var)
+    def _format_precondition_as_state_check(self, precond, time_var="t"):
+        """Convert a precondition to in_state/not in_state clause."""
+        if isinstance(precond, tuple) and precond[0] == 'not':
+            atom = precond[1]
+            return f"not in_state({self._fmt_atom(atom)}, {time_var})"
         else:
-            # Synthetic checked_state for typing - use ALL method params
-            check_pred = f"checked_state_{method_term_name}_typing"
-            fmt_vars = [self._fmt_term(p[0]) for p in method['params']]
-            head_args = fmt_vars + [self.time_var] if hasSubtasks else fmt_vars + ["t"]
-            check_clauses.append(f"{check_pred}({', '.join(head_args)})")
-
-        return check_clauses
+            return f"in_state({self._fmt_atom(precond)}, {time_var})"
 
     def _fmt_method_head(self, method, time_var):
         """Format method head with compound task atom, method-only params, and time."""
@@ -936,232 +915,93 @@ class ASPTranslator:
             # Get task atom from first method (all methods decompose the same task)
             task_atom = self._fmt_atom(methods[0]['task'])
 
-            if len(methods) == 1:
-                method = methods[0]
-                method_head = self._fmt_method_head(method, "t")
-                typing = self._get_method_typing_constraints(method)
-
-                # Check if method has own params (not in task)
-                task_vars = set()
-                if method['task']:
-                    for term in method['task'][1:]:
-                        if term.startswith('?'):
-                            task_vars.add(term)
-                has_own_params = any(p[0] not in task_vars for p in method['params'])
-
-                if has_own_params:
-                    # Choice rule needed to bind extra params
-                    if typing:
-                        alt = f"{method_head} : {', '.join(typing)}"
-                    else:
-                        alt = method_head
-                    rule = f"1 {{ {alt} }} 1 :- time(t), taskTBA({task_atom}, t)."
-                else:
-                    # Simple rule - all params bound by taskTBA
-                    body_parts = [f"time(t)", f"taskTBA({task_atom}, t)"] + typing
-                    rule = f"{method_head} :- {', '.join(body_parts)}."
-                rules.append(rule)
-            else:
-                # Multiple methods - build choice rule
-                alternatives = []
-                for method in methods:
-                    method_head = self._fmt_method_head(method, "t")
-                    conditions = self._get_method_typing_constraints(method)
-
-                    if conditions:
-                        alt = f"{method_head} : {', '.join(conditions)}"
-                    else:
-                        alt = method_head
-                    alternatives.append(alt)
-
-                choice_body = "; ".join(alternatives)
-                rule = f"1 {{ {choice_body} }} 1 :- time(t), taskTBA({task_atom}, t)."
-                rules.append(rule)
-
-            rules.append("")
-        
-        # Generate Checked State Rules (Definition 27)
-        rules.append("% Checked State rules")
-        rules.append("")
-        
-        for task_name, methods in self.method_groups.items():
+            # Build choice rule with preconditions as conditions
+            alternatives = []
             for method in methods:
                 method_head = self._fmt_method_head(method, "t")
-                method_term_name = method['name'].replace('-', '_')
 
-                # Get variables from compound task head (these are "bound")
-                compound_task_vars = set()
-                if method['task']:
-                    for term in method['task'][1:]:  # Skip task name
-                        if term.startswith('?'):
-                            compound_task_vars.add(term)
+                # Typing constraints for method params
+                conditions = self._get_method_typing_constraints(method)
 
-                # Get variables from method parameters (also "bound")
-                method_param_vars = {p[0] for p in method['params']}
+                # Preconditions as in_state/not in_state
+                for precond in method['preconditions']:
+                    conditions.append(self._format_precondition_as_state_check(precond, "t"))
 
-                # All bound variables = task params + method params
-                bound_vars = compound_task_vars.union(method_param_vars)
+                if conditions:
+                    alt = f"{method_head} : {', '.join(conditions)}"
+                else:
+                    alt = method_head
+                alternatives.append(alt)
 
-                for idx, precond in enumerate(method['preconditions']):
-                    check_pred = f"checked_state_{method_term_name}_{idx}"
+            choice_body = "; ".join(alternatives)
+            rule = f"1 {{ {choice_body} }} 1 :- time(t), taskTBA({task_atom}, t)."
+            rules.append(rule)
 
-                    # Extract atom for the head
-                    if isinstance(precond, tuple) and precond[0] == 'not':
-                        raw_atom = precond[1]
-                        is_negated = True
-                    else:
-                        raw_atom = precond
-                        is_negated = False
-
-                    fmt_atom = self._fmt_atom(raw_atom)
-
-                    # Head: checked_state_...(Atom, T)
-                    check_atom_head = f"{check_pred}({fmt_atom}, t)"
-
-                    # Get variables from precondition
-                    raw_vars = self._get_variables_from_conditions([precond])
-
-                    # Identify unbound variables (not in task head or method params)
-                    unbound_vars = raw_vars - bound_vars
-
-                    if not unbound_vars:
-                        # Case 1: All variables bound - normal rule
-                        check_body = [method_head]
-                        if is_negated:
-                            check_body.append(f"not in_state({fmt_atom}, t)")
-                        else:
-                            check_body.append(f"in_state({fmt_atom}, t)")
-                        rules.append(f"{check_atom_head} :- {', '.join(check_body)}.")
-                    else:
-                        # Case 2: Unbound variables - choice rule
-                        # Get typing constraints for unbound variables from predicate definition
-                        typing_constraints = self._get_typing_from_predicate(raw_atom, unbound_vars)
-
-                        # in_state or not in_state
-                        if is_negated:
-                            state_check = f"not in_state({fmt_atom}, t)"
-                        else:
-                            state_check = f"in_state({fmt_atom}, t)"
-
-                        # Build choice rule: 1 { head : typing, state_check } 1 :- method_head.
-                        condition_parts = typing_constraints + [state_check]
-                        choice_body = f"{check_atom_head} : {', '.join(condition_parts)}"
-                        rules.append(f"1 {{ {choice_body} }} 1 :- {method_head}.")
-
-                # Synthetic checked_state for methods without preconditions
-                if not method['preconditions']:
-                    check_pred = f"checked_state_{method_term_name}_typing"
-
-                    # Use ALL method params for synthetic checked_state
-                    fmt_vars = [self._fmt_term(p[0]) for p in method['params']]
-
-                    # Head: checked_state_..._typing(X, Y, ..., T)
-                    head_args = fmt_vars + ["t"]
-                    check_atom_head = f"{check_pred}({', '.join(head_args)})"
-
-                    # Synthetic checked_state always has all variables bound (they're all method params in method_head)
-                    # Therefore, always use a simple rule, not a choice rule
-                    rules.append(f"{check_atom_head} :- {method_head}.")
-        rules.append("")
+            rules.append("")
 
         # Translate subtasks for each method
         rules.append("% Subtask rules")
         rules.append("")
-        
+
         for task_name, methods in self.method_groups.items():
             for method in methods:
                 method_head = self._fmt_method_head(method, self.time_var)
                 subtasks = method['subtasks']
 
-                # Build checking clauses (using helper function)
-                check_clauses = self._build_check_clauses(method, True)
-
                 # Subtask rules generation
                 for i, subtask in enumerate(subtasks):
                     subtask_atom = self._fmt_atom(subtask)
-
-                    # Determine time variable for this subtask
-                    # time_var = self._get_time_var(i+1) if i > 0 else self.time_var
-
-                    # Get typing constraints for the subtask's parameters
                     task_typing_clauses = self._get_task_typing_constraints(subtask)
 
-                    # Build rule body: time + typing (early!) + method + checks
                     if i == 0:
-                        body_parts = [f"time(t)"] + task_typing_clauses + [self._fmt_method_head(method, 't')] + self._build_check_clauses(method, False)
-
-
-                    # Add causable constraint for immediately previous subtask
-                    if i > 0:
-                        body_parts = [f"time(t)"] + task_typing_clauses + [method_head] + check_clauses
+                        # First subtask: only method as condition
+                        body_parts = [f"time(t)"] + task_typing_clauses + [self._fmt_method_head(method, 't')]
+                    else:
+                        # Following subtasks: method + causable of previous
+                        body_parts = [f"time(t)"] + task_typing_clauses + [method_head]
                         prev_subtask = self._fmt_atom(subtasks[i-1])
                         prev_time = self._get_time_var(i)
-                        curr_time = "t"
-                        body_parts.append(f"causable({prev_subtask}, {prev_time}, {curr_time})")
-                        body_parts.append(f"{curr_time} >= {prev_time}")
+                        body_parts.append(f"causable({prev_subtask}, {prev_time}, t)")
+                        body_parts.append(f"t >= {prev_time}")
 
-                    # Deduplicate to remove redundant typing constraints
                     body_parts = self._deduplicate_body_parts(body_parts)
-
-                    body = ", ".join(body_parts)
-
-                    # Regular rule for all subtasks (no choice rules)
-                    subtask_rule = f"taskTBA({subtask_atom}, t) :- {body}."
-
+                    subtask_rule = f"taskTBA({subtask_atom}, t) :- {', '.join(body_parts)}."
                     rules.append(subtask_rule)
-                
+
                 rules.append("")
         
         # Causable rules for compound tasks
         rules.append("% Causable rules for compound tasks")
         rules.append("")
-        
+
         for task_name, methods in self.method_groups.items():
             for method in methods:
                 task_atom = self._fmt_atom(method['task'])
                 subtasks = method['subtasks']
-                method_head = self._fmt_method_head(method, self.time_var) if len(subtasks) != 0 else self._fmt_method_head(method, "t")
+                method_head = self._fmt_method_head(method, self.time_var) if subtasks else self._fmt_method_head(method, "t")
 
-                # Build checking clauses (using helper function)
-                check_clauses = self._build_check_clauses(method, True) if len(subtasks) != 0 else self._build_check_clauses(method, False)
-
-                # Get typing constraints for the compound task itself
+                # Typing constraints
                 compound_task_typing = self._get_task_typing_constraints(method['task'])
-
-                # Get typing constraints for method params
                 method_param_names = [p[0] for p in method['params']]
                 typing_clauses = self._get_typing_constraints(method_param_names, method['params'])
 
-                # Build causable constraint for LAST subtask only
+                # Causable for last subtask
                 causable_clauses = []
                 if subtasks:
-                    last_subtask = subtasks[-1]
-                    last_subtask_atom = self._fmt_atom(last_subtask)
-
-                    # Calculate time variables for last subtask
+                    last_subtask_atom = self._fmt_atom(subtasks[-1])
                     n = len(subtasks)
-                    if n == 1:
-                        start_var = self.time_var
-                        end_var = "t"
-                    else:
-                        start_var = self._get_time_var(n)
-                        end_var = "t"
+                    start_var = self.time_var if n == 1 else self._get_time_var(n)
+                    causable_clauses.append(f"causable({last_subtask_atom}, {start_var}, t)")
+                    causable_clauses.append(f"t >= {start_var}")
 
-                    causable_clauses.append(f"causable({last_subtask_atom}, {start_var}, {end_var})")
-                    causable_clauses.append(f"{end_var} >= {start_var}")
-
-                # Combine all body parts: typing early for better grounding
-                body_parts = typing_clauses + compound_task_typing + [method_head] + check_clauses + causable_clauses
+                # No check_clauses - preconditions already checked in method selection
+                body_parts = typing_clauses + compound_task_typing + [method_head] + causable_clauses
                 body = ", ".join(self._deduplicate_body_parts(body_parts))
 
-                # Final time variable
-                #final_time = self._get_time_var(len(subtasks)+1) if len(subtasks) != 0 else self.time_var
-                final_time = "t"
-                start_time = self.time_var if len(subtasks) != 0 else "t"
-                # Causable rule for compound task
-                causable_rule = f"causable({task_atom}, {start_time}, {final_time}) :- {body}."
+                start_time = self.time_var if subtasks else "t"
+                causable_rule = f"causable({task_atom}, {start_time}, t) :- {body}."
                 rules.append(causable_rule)
-            
+
             rules.append("")
         
         return "\n".join(rules)
