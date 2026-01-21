@@ -403,7 +403,8 @@ class HDDLParser:
                     'params': params,
                     'task': task,
                     'preconditions': preconditions,
-                    'subtasks': subtasks
+                    'subtasks': subtasks,
+                    'weight': 0
                 })
             
             pos = method_start + len(method_block) if method_block else pos + 1
@@ -523,7 +524,6 @@ class ASPTranslator:
     def __init__(self, parsed_data):
         self.data = parsed_data
         self.method_groups = self._group_methods()
-        
         # Determine unique variable names to avoid collisions with domain variables
         domain_vars = self._get_all_domain_vars()
         self.time_var = self._determine_unique_var("T", domain_vars)
@@ -836,6 +836,15 @@ class ASPTranslator:
             constraints.extend(self._get_task_typing_constraints(method['task']))
 
         return self._deduplicate_body_parts(constraints)
+
+    def _calc_method_weights(self):
+        """Calculate method weights."""
+        for method in self.data.methods:
+            mult = 1
+            if method['task'] in method['subtasks']:
+                mult = 3
+            method["weight"] = (len(method["subtasks"])*mult)+len(method["preconditions"])
+
 
     def translate_domain(self):
         """Translate domain to ASP."""
