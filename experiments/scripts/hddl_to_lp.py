@@ -3,8 +3,24 @@ import re
 import os
 from collections import defaultdict
 
+
+class HDDLParseError(Exception):
+    """Exception for unsupported HDDL constructs."""
+    pass
+
+
 class HDDLParser:
     """Robust HDDL parser using balanced parenthesis matching."""
+
+    KNOWN_DOMAIN_BLOCKS = {
+        'define', 'domain', 'requirements', 'types', 'constants',
+        'predicates', 'task', 'action', 'method'
+    }
+    KNOWN_PROBLEM_BLOCKS = {
+        'define', 'problem', 'domain', 'objects', 'init', 'htn', 'goal'
+    }
+    KNOWN_CONDITION_KEYWORDS = {'and', 'not'}
+    UNSUPPORTED_CONDITION_KEYWORDS = {'or', 'forall', 'exists', 'imply', 'when', 'for'}
 
     def __init__(self, domain_file, problem_file):
         self.domain_content = self._read_file(domain_file)
@@ -15,7 +31,8 @@ class HDDLParser:
         self.tasks = {}
         self.actions = {}
         self.methods = []
-        
+        self.constants = {}  # Constants aus Domain
+
         self.objects = {}
         self.initial_state = []
         self.goal_state = []  
@@ -115,7 +132,15 @@ class HDDLParser:
         # Remove outer parens
         if sexp_str.startswith('(') and sexp_str.endswith(')'):
             sexp_str = sexp_str[1:-1].strip()
-        
+
+        # Check for unsupported condition keywords
+        first_word = sexp_str.split()[0].lower() if sexp_str.split() else ''
+        if first_word in self.UNSUPPORTED_CONDITION_KEYWORDS:
+            raise HDDLParseError(
+                f"Nicht unterstütztes HDDL-Konstrukt: '{first_word}'. "
+                f"Nur 'and' und 'not' werden unterstützt."
+            )
+
         # Skip 'and'
         if sexp_str.lower().startswith('and'):
             # Find where 'and' ends (next space or paren)
@@ -178,6 +203,26 @@ class HDDLParser:
         tokens = self._tokenize_sexp(atom_str)
         return tuple(t.lower() for t in tokens)
 
+    def _validate_domain_blocks(self, content):
+        """Check for unknown top-level blocks in domain."""
+        for match in re.finditer(r'\(:(\w+)', content):
+            keyword = match.group(1).lower()
+            if keyword not in self.KNOWN_DOMAIN_BLOCKS:
+                raise HDDLParseError(
+                    f"Unbekannter HDDL-Block in Domain: ':{keyword}'. "
+                    f"Unterstützte Blöcke: {', '.join(':' + k for k in sorted(self.KNOWN_DOMAIN_BLOCKS))}"
+                )
+
+    def _validate_problem_blocks(self, content):
+        """Check for unknown top-level blocks in problem."""
+        for match in re.finditer(r'\(:(\w+)', content):
+            keyword = match.group(1).lower()
+            if keyword not in self.KNOWN_PROBLEM_BLOCKS:
+                raise HDDLParseError(
+                    f"Unbekannter HDDL-Block in Problem: ':{keyword}'. "
+                    f"Unterstützte Blöcke: {', '.join(':' + k for k in sorted(self.KNOWN_PROBLEM_BLOCKS))}"
+                )
+
     def parse(self):
         """Main parsing."""
         self._parse_domain()
@@ -186,7 +231,10 @@ class HDDLParser:
     def _parse_domain(self):
         """Parse domain file."""
         content = self.domain_content
-        
+
+        # Validate domain blocks
+        self._validate_domain_blocks(content)
+
         # Parse types
         types_start_match = re.search(r'\(:types\s', content, re.IGNORECASE)
         if types_start_match:
@@ -202,7 +250,20 @@ class HDDLParser:
                  typed_list = self._parse_typed_list(inner)
                  for item, parent in typed_list:
                      self.types[item] = parent
-        
+
+        # Parse constants
+        constants_match = re.search(r'\(:constants\s', content, re.IGNORECASE)
+        if constants_match:
+            start = constants_match.start()
+            block, _ = self._extract_balanced(content, start)
+            if block:
+                keyword_len = len('(:constants')
+                inner_start = block.lower().find('(:constants') + keyword_len
+                inner = block[inner_start:-1].strip()
+                typed_list = self._parse_typed_list(inner)
+                for const, typ in typed_list:
+                    self.constants[const] = typ
+
         # Parse predicates
         preds_match = re.search(r'\(:predicates\s+(.*?)\)\s*\(:task', content, re.DOTALL | re.IGNORECASE)
         if preds_match:
@@ -411,7 +472,10 @@ class HDDLParser:
     def _parse_problem(self):
             """Parse problem file robustly using balanced extraction."""
             content = self.problem_content
-            
+
+            # Validate problem blocks
+            self._validate_problem_blocks(content)
+
             # 1. Parse objects
             obj_match = re.search(r'\(:objects\s', content, re.IGNORECASE)
             if obj_match:
@@ -523,7 +587,13 @@ class ASPTranslator:
     def __init__(self, parsed_data):
         self.data = parsed_data
         self.method_groups = self._group_methods()
-        
+        self.equality_types = set()  # Types used in equality predicates (=)
+
+        # Rename constant 't' to 'tt' to avoid collision with time parameter
+        self.constant_renames = {}
+        if 't' in self.data.constants:
+            self.constant_renames['t'] = 'tt'
+
         # Determine unique variable names to avoid collisions with domain variables
         domain_vars = self._get_all_domain_vars()
         self.time_var = self._determine_unique_var("T", domain_vars)
@@ -555,6 +625,29 @@ class ASPTranslator:
                 return candidate
             # Try next candidate by appending base
             candidate += base
+
+    def _collect_equality_types(self):
+        """Collect all types used in equality predicates (=)."""
+        def process_conditions(conditions, param_list):
+            type_map = {p[0]: p[1] for p in param_list}
+            for cond in conditions:
+                atom = cond[1] if isinstance(cond, tuple) and cond[0] == 'not' else cond
+                if atom and atom[0] == '=':
+                    # Equality predicate found
+                    for arg in atom[1:]:
+                        if arg.startswith('?') and arg in type_map:
+                            typ = type_map[arg]
+                            if typ != 'object':
+                                self.equality_types.add(typ)
+
+        # Search through actions
+        for action in self.data.actions.values():
+            process_conditions(action['pre'], action['params'])
+            process_conditions(action['eff'], action['params'])
+
+        # Search through methods
+        for method in self.data.methods:
+            process_conditions(method['preconditions'], method['params'])
 
     def _preprocess_actions_with_preconditions(self):
         """
@@ -637,13 +730,22 @@ class ASPTranslator:
         """Format term (?x -> X, a -> a)."""
         if term.startswith('?'):
             return term[1:].upper()
-        return term.replace('-', '_')
+        # Rename constants that collide with time parameter
+        term_lower = term.lower().replace('-', '_')
+        if term_lower in self.constant_renames:
+            return self.constant_renames[term_lower]
+        return term_lower
 
     def _fmt_atom(self, atom):
         """Format atom as ASP."""
         if not atom:
             return ""
-        name = atom[0].replace('-', '_')  # Replace hyphens with underscores
+        name = atom[0]
+        # Special case: = becomes equals
+        if name == '=':
+            name = 'equals'
+        else:
+            name = name.replace('-', '_')  # Replace hyphens with underscores
         params = [self._fmt_term(p) for p in atom[1:]]
         if not params:
             return name
@@ -839,6 +941,7 @@ class ASPTranslator:
 
     def translate_domain(self):
         """Translate domain to ASP."""
+        self._collect_equality_types()
         action_wrappers = self._preprocess_actions_with_preconditions()
         self._replace_action_references_in_methods(action_wrappers)
 
@@ -858,6 +961,29 @@ class ASPTranslator:
                 supertype_fmt = supertype.replace('-', '_')
                 rules.append(f"{supertype_fmt}({self.gen_var}) :- {subtype_fmt}({self.gen_var}).")
         rules.append("")
+
+        # Constant declarations (from domain)
+        if self.data.constants:
+            rules.append("% Constant declarations")
+            for const, typ in self.data.constants.items():
+                const_fmt = const.replace('-', '_')
+                # Rename 't' to 'tt' to avoid collision with time parameter
+                if const_fmt in self.constant_renames:
+                    const_fmt = self.constant_renames[const_fmt]
+                if typ != 'object':
+                    rules.append(f"{typ.replace('-', '_')}({const_fmt}).")
+                else:
+                    # Für Konstanten ohne expliziten Typ nur als Fakt ausgeben
+                    rules.append(f"constant({const_fmt}).")
+            rules.append("")
+
+        # Equality rules for types used in = predicates
+        if self.equality_types:
+            rules.append("% Equality rules")
+            for typ in sorted(self.equality_types):
+                typ_fmt = typ.replace('-', '_')
+                rules.append(f"equals(A, B) :- A = B, {typ_fmt}(A), {typ_fmt}(B).")
+            rules.append("")
 
         # Atom definitions for predicates
         rules.append("% Atom definitions")
@@ -1265,9 +1391,13 @@ def main():
     problem_out_file = sys.argv[4]
     primitives_out_file = sys.argv[5]
 
-    # Parse HDDL
-    parser = HDDLParser(domain_file, problem_file)
-    parser.parse()
+    try:
+        # Parse HDDL
+        parser = HDDLParser(domain_file, problem_file)
+        parser.parse()
+    except HDDLParseError as e:
+        print(f"FEHLER: {e}", file=sys.stderr)
+        sys.exit(1)
 
     # Translate to ASP
     translator = ASPTranslator(parser)

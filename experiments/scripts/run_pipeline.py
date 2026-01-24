@@ -10,7 +10,7 @@ SLURM_JOB_ID = os.environ.get('SLURM_JOB_ID', 'local')
 # python3 run_pipeline.py domain.hddl problem.hddl framework.lp domain_output.lp problem_output.lp primitives.txt clingo_output.txt orderedtasklist.txt
 
 
-def run_clingo_incremental(domain_file, problem_file, framework_file, output_file, run_with_stats, max_time=300):
+def run_clingo_incremental(domain_file, problem_file, framework_file, output_file, run_with_stats, max_time=1500):
     """Run Clingo with incremental solving using the Python API.
 
     Args:
@@ -24,7 +24,11 @@ def run_clingo_incremental(domain_file, problem_file, framework_file, output_fil
     Returns:
         Tuple (time_bound, success, model_str)
     """
-    ctl = clingo.Control(["--configuration=handy"])
+    ctl = clingo.Control([
+     "--configuration=crafty",   # Besser für strukturierte/crafted Probleme
+     "--restarts=L,100",         # Luby-Restarts für schwierige Probleme
+     "--save-progress=10"        # Cache Wahrheitswerte bei Backjumps
+ ])
 
     # Load all files
     ctl.load(domain_file)
@@ -97,7 +101,7 @@ def run_workflow(domain_file, problem_file, framework_file,
     print("--- 1. Starte Übersetzung (hddl_to_lp) ---")
     try:
         subprocess.run(
-            ["python3", hddl_to_lp_script, domain_file, problem_file,
+            ["py", hddl_to_lp_script, domain_file, problem_file,
              domain_output, problem_output, primitives_output],
             check=True
         )
@@ -124,7 +128,7 @@ def run_workflow(domain_file, problem_file, framework_file,
             framework_file=framework_file,
             output_file=clingo_output,
             run_with_stats=False,
-            max_time=300
+            max_time=1500
         )
 
         if not success:
@@ -138,7 +142,7 @@ def run_workflow(domain_file, problem_file, framework_file,
     print("\n--- 3. Verarbeite Ergebnisse (parseResult) ---")
     try:
         subprocess.run(
-            ["python3", parse_result_script, primitives_output,
+            ["py", parse_result_script, primitives_output,
              clingo_output, tasklist_output],
             check=True
         )
