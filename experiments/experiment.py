@@ -160,6 +160,12 @@ SUITE = [
     ("transport", "problem08.hddl"),
     ("transport", "problem09.hddl"),
     ("transport", "problem10.hddl"),
+    ("robot", "problem01.hddl"),
+    ("robot", "problem02.hddl"),
+    ("robot", "problem03.hddl"),
+    ("robot", "problem04.hddl"),
+    ("robot", "problem05.hddl"),
+    ("robot", "problem10.hddl"),
 ]
 
 # ============================================================================

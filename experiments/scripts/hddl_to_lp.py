@@ -172,6 +172,9 @@ class HDDLParser:
                 if expr:
                     # Remove outer parens
                     inner = expr[1:-1].strip() if expr.startswith('(') and expr.endswith(')') else expr
+                    # Normalize "not(" to "not (" for consistent parsing
+                    if inner.lower().startswith('not('):
+                        inner = 'not (' + inner[4:]
                     tokens = inner.split()
                     
                     if tokens:
@@ -982,7 +985,7 @@ class ASPTranslator:
             rules.append("% Equality rules")
             for typ in sorted(self.equality_types):
                 typ_fmt = typ.replace('-', '_')
-                rules.append(f"equals(A, B) :- A = B, {typ_fmt}(A), {typ_fmt}(B).")
+                rules.append(f"in_state(equals(A, A), 0) :-{typ_fmt}(A).")
             rules.append("")
 
         # Atom definitions for predicates
@@ -1293,7 +1296,7 @@ class ASPTranslator:
         rules.append("% Object declarations")
         for obj, typ in self.data.objects.items():
             if typ != 'object':  # Don't add default type
-                rules.append(f"{typ.replace('-', '_')}({obj}).")
+                rules.append(f"{typ.replace('-', '_')}({self._fmt_term(obj)}).")
         rules.append("")
 
         # Translate initial state
