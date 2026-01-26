@@ -326,7 +326,8 @@ class HDDLParser:
                 break
             
             action_start = pos + match.start()
-            action_name = match.group(1).lower()
+            action_name = match.group(1).lower().replace('-', '_')
+
             
             # Find the action block using balanced extraction
             action_block, next_pos = self._extract_balanced(content, action_start)
@@ -662,6 +663,7 @@ class ASPTranslator:
         
         for action_name, action in self.data.actions.items():
             if action['pre']:  # Hat preconditions
+                action_name = action_name.lower().replace('-', '_')
                 # Erstelle compound task wrapper
                 wrapper_name = f"{action_name}_wrapper"
                 wrapper_params = action['params']
@@ -709,7 +711,7 @@ class ASPTranslator:
             # Ersetze in subtasks
             new_subtasks = []
             for subtask in method['subtasks']:
-                task_name = subtask[0]
+                task_name = subtask[0].lower().replace('-', '_')
                 if task_name in action_wrappers:
                     # Ersetze durch wrapper
                     wrapper_name = action_wrappers[task_name]
@@ -1283,7 +1285,24 @@ class ASPTranslator:
                 rules.append(causable_rule)
             
             rules.append("")
-        
+
+        # Debug: Show method selection facts
+        rules.append("% Debug: Show method selections")
+        for task_name, methods in self.method_groups.items():
+            for method in methods:
+                method_name = method['name'].replace('-', '_')
+                # Count parameters: task atom params + method-only params + time
+                task_vars = set()
+                if method['task']:
+                    for term in method['task'][1:]:
+                        if term.startswith('?'):
+                            task_vars.add(term)
+                method_only_count = sum(1 for p in method['params'] if p[0] not in task_vars)
+                # Total arity = 1 (task atom) + method_only_count + 1 (time)
+                total_arity = 1 + method_only_count + 1
+                rules.append(f"#show {method_name}/{total_arity}.")
+        rules.append("")
+
         return "\n".join(rules)
 
     def translate_problem(self):
