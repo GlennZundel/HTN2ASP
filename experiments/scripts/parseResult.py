@@ -37,19 +37,22 @@ def process_tasks(names_file, data_file, result_file):
             number_str = match.group(2)  # z.B. 10
             number = int(number_str)
 
-            # Funktionsnamen extrahieren (alles vor der ersten Klammer)
-            func_name_match = re.match(r'^([a-zA-Z0-9_]+)\(', action_body)
-            
+            # Funktionsnamen extrahieren (mit oder ohne Klammer)
+            func_name_match = re.match(r'^([a-zA-Z0-9_]+)(\(|$)', action_body)
+
             if func_name_match:
                 func_name = func_name_match.group(1)
 
                 # Nur verarbeiten, wenn der Name in names.txt steht
                 if func_name in valid_names:
-                    # Formatierung:
-                    # Input: move(locA,locB) -> wir entfernen die letzte Klammer
-                    # Output: move(locA,locB, 10)
-                    formatted_string = f"{action_body[:-1]}, {number})"
-                    
+                    # Unterscheiden: mit oder ohne Argumente
+                    if '(' in action_body:
+                        # Mit Argumente: move(locA,locB) -> move(locA,locB, 10)
+                        formatted_string = f"{action_body[:-1]}, {number})"
+                    else:
+                        # Ohne Argumente: ok -> ok(10)
+                        formatted_string = f"{action_body}({number})"
+
                     # Tupel speichern: (Sortier-Zahl, Fertiger String)
                     parsed_items.append((number, formatted_string))
 

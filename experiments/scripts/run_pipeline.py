@@ -2,6 +2,9 @@ import subprocess
 import sys
 import os
 import clingo
+from clingo.script import enable_python
+
+enable_python()
 
 # SLURM Job-ID erfassen (für sacct-Abfrage nach dem Experiment)
 SLURM_JOB_ID = os.environ.get('SLURM_JOB_ID', 'local')

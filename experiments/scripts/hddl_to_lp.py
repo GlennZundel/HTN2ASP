@@ -756,6 +756,24 @@ class ASPTranslator:
             return name
         return f"{name}({', '.join(params)})"
 
+    def _fmt_atom_with_id(self, atom, id_expr):
+        """Format atom with ID as last parameter."""
+        base_atom = self._fmt_atom(atom)
+        if '(' in base_atom and base_atom.endswith(')'):
+            return f"{base_atom[:-1]}, {id_expr})"
+        else:
+            # Atom without parameters
+            return f"{base_atom}({id_expr})"
+
+    def _build_id_call(self, method_name, task_params, method_params, index, time_var):
+        """Build the @id(...) call for unique subtask identification."""
+        all_args = [f'"{method_name}"']
+        all_args.extend(task_params)
+        all_args.extend(method_params)
+        all_args.append(str(index))
+        all_args.append(time_var)
+        return f"@id({', '.join(all_args)})"
+
     def _deduplicate_body_parts(self, body_parts):
         """Remove duplicate entries while preserving order."""
         seen = set()
@@ -896,14 +914,14 @@ class ASPTranslator:
 
         return check_clauses
 
-    def _fmt_method_head(self, method, time_var):
-        """Format method head with compound task atom, method-only params, and time."""
+    def _fmt_method_head(self, method, time_var, id_var="ID"):
+        """Format method head with compound task atom (including ID), method-only params, and time."""
         name = method['name'].replace('-', '_')
 
-        # Format the full compound task atom (e.g., "do_put_on(C, S2)" or just "nop")
-        task_atom = ""
+        # Format the full compound task atom with ID (e.g., "do_put_on(C, S2, ID)" or just "nop(ID)")
+        task_atom_with_id = ""
         if method['task']:
-            task_atom = self._fmt_atom(method['task'])
+            task_atom_with_id = self._fmt_atom_with_id(method['task'], id_var)
 
         # Get task variables to exclude from method-only params
         task_vars = set()
@@ -919,8 +937,8 @@ class ASPTranslator:
                 method_only_params.append(self._fmt_term(param_name))
 
         parts = []
-        if task_atom:
-            parts.append(task_atom)
+        if task_atom_with_id:
+            parts.append(task_atom_with_id)
         parts.extend(method_only_params)
         parts.append(str(time_var))
 
@@ -951,6 +969,18 @@ class ASPTranslator:
         self._replace_action_references_in_methods(action_wrappers)
 
         rules = []
+
+        # Python script for unique ID generation
+        rules.append("#script (python)")
+        rules.append("import hashlib")
+        rules.append("import clingo")
+        rules.append("")
+        rules.append("def id(*args):")
+        rules.append("    input_str = '#'.join(str(arg) for arg in args)")
+        rules.append("    hash_val = hashlib.sha256(input_str.encode()).hexdigest()[:12]")
+        rules.append("    return clingo.String(hash_val)")
+        rules.append("#end.")
+        rules.append("")
 
         # Header comment
         rules.append("#program base.")
@@ -1019,35 +1049,36 @@ class ASPTranslator:
 
         # Translate primitive tasks (actions)
         for action_name, action in self.data.actions.items():
-            # Build action atom
+            # Build action atom with ID parameter
             param_names = tuple(p[0] for p in action['params'])
             action_atom_tuple = (action_name,) + param_names
             action_atom = self._fmt_atom(action_atom_tuple)
-            
+            action_atom_with_id = self._fmt_atom_with_id(action_atom_tuple, "ID")
+
             # Get typing constraints for action parameters
             action_typing = self._get_task_typing_constraints(action_atom_tuple)
-            
-            # Build body for causable rule
-            body_parts = [f"taskTBA({action_atom}, t-1)"] + action_typing
+
+            # Build body for causable rule - ID comes from taskTBA
+            body_parts = [f"taskTBA({action_atom_with_id}, t-1)"] + action_typing
             body = ", ".join(body_parts)
 
-            # causable rule for primitive task
-            causable_rule = f"causable({action_atom}, t-1, t) :- {body}."
+            # causable rule for primitive task (with ID)
+            causable_rule = f"causable({action_atom_with_id}, t-1, t) :- {body}."
             rules.append(causable_rule)
 
-            # Effects
+            # Effects (also use action_atom_with_id for taskTBA reference)
             for eff in action['eff']:
                 if isinstance(eff, tuple) and eff[0] == 'not':
                     # Delete effect
                     eff_atom = self._fmt_atom(eff[1])
-                    delete_rule = f"out_state({eff_atom}, t) :- taskTBA({action_atom}, t-1)."
+                    delete_rule = f"out_state({eff_atom}, t) :- taskTBA({action_atom_with_id}, t-1)."
                     rules.append(delete_rule)
                 else:
                     # Add effect
                     eff_atom = self._fmt_atom(eff)
-                    add_rule = f"in_state({eff_atom}, t) :- taskTBA({action_atom}, t-1)."
+                    add_rule = f"in_state({eff_atom}, t) :- taskTBA({action_atom_with_id}, t-1)."
                     rules.append(add_rule)
-            
+
             rules.append("")
         
         # Translate methods
@@ -1055,8 +1086,8 @@ class ASPTranslator:
         rules.append("")
 
         for task_name, methods in self.method_groups.items():
-            # Get task atom from first method (all methods decompose the same task)
-            task_atom = self._fmt_atom(methods[0]['task'])
+            # Get task atom with ID from first method (all methods decompose the same task)
+            task_atom_with_id = self._fmt_atom_with_id(methods[0]['task'], "ID")
 
             if len(methods) == 1:
                 method = methods[0]
@@ -1077,10 +1108,10 @@ class ASPTranslator:
                         alt = f"{method_head} : {', '.join(typing)}"
                     else:
                         alt = method_head
-                    rule = f"1 {{ {alt} }} 1 :- time(t), taskTBA({task_atom}, t)."
+                    rule = f"1 {{ {alt} }} 1 :- time(t), taskTBA({task_atom_with_id}, t)."
                 else:
                     # Simple rule - all params bound by taskTBA
-                    body_parts = [f"time(t)", f"taskTBA({task_atom}, t)"] + typing
+                    body_parts = [f"time(t)", f"taskTBA({task_atom_with_id}, t)"] + typing
                     rule = f"{method_head} :- {', '.join(body_parts)}."
                 rules.append(rule)
             else:
@@ -1097,7 +1128,7 @@ class ASPTranslator:
                     alternatives.append(alt)
 
                 choice_body = "; ".join(alternatives)
-                rule = f"1 {{ {choice_body} }} 1 :- time(t), taskTBA({task_atom}, t)."
+                rule = f"1 {{ {choice_body} }} 1 :- time(t), taskTBA({task_atom_with_id}, t)."
                 rules.append(rule)
 
             rules.append("")
@@ -1189,7 +1220,7 @@ class ASPTranslator:
         # Translate subtasks for each method
         rules.append("% Subtask rules")
         rules.append("")
-        
+
         for task_name, methods in self.method_groups.items():
             for method in methods:
                 method_head = self._fmt_method_head(method, self.time_var)
@@ -1198,12 +1229,26 @@ class ASPTranslator:
                 # Build checking clauses (using helper function)
                 check_clauses = self._build_check_clauses(method, True)
 
+                # Extract task parameter variables for @id
+                task_param_vars = [self._fmt_term(p) for p in method['task'][1:] if p.startswith('?')]
+                # Extract method-only parameter variables for @id
+                task_vars_set = set(method['task'][1:]) if method['task'] else set()
+                method_only_param_vars = [self._fmt_term(p[0]) for p in method['params'] if p[0] not in task_vars_set]
+
                 # Subtask rules generation
                 for i, subtask in enumerate(subtasks):
-                    subtask_atom = self._fmt_atom(subtask)
-
-                    # Determine time variable for this subtask
-                    # time_var = self._get_time_var(i+1) if i > 0 else self.time_var
+                    # Build @id for this subtask
+                    # For i=0: time is 't' (start of first subtask)
+                    # For i>0: time is T (method start time)
+                    id_time_var = "t" if i == 0 else self.time_var
+                    subtask_id = self._build_id_call(
+                        method['name'],
+                        task_param_vars,
+                        method_only_param_vars,
+                        i,
+                        id_time_var
+                    )
+                    subtask_atom_with_id = self._fmt_atom_with_id(subtask, subtask_id)
 
                     # Get typing constraints for the subtask's parameters
                     task_typing_clauses = self._get_task_typing_constraints(subtask)
@@ -1212,14 +1257,21 @@ class ASPTranslator:
                     if i == 0:
                         body_parts = [f"time(t)"] + task_typing_clauses + [self._fmt_method_head(method, 't')] + self._build_check_clauses(method, False)
 
-
                     # Add causable constraint for immediately previous subtask
                     if i > 0:
                         body_parts = [f"time(t)"] + task_typing_clauses + [method_head] + check_clauses
-                        prev_subtask = self._fmt_atom(subtasks[i-1])
+                        # Build @id for previous subtask - ALWAYS use T (method start time)
+                        prev_subtask_id = self._build_id_call(
+                            method['name'],
+                            task_param_vars,
+                            method_only_param_vars,
+                            i - 1,
+                            self.time_var  # Always T for prev subtask
+                        )
+                        prev_subtask_with_id = self._fmt_atom_with_id(subtasks[i-1], prev_subtask_id)
                         prev_time = self._get_time_var(i)
                         curr_time = "t"
-                        body_parts.append(f"causable({prev_subtask}, {prev_time}, {curr_time})")
+                        body_parts.append(f"causable({prev_subtask_with_id}, {prev_time}, {curr_time})")
                         body_parts.append(f"{curr_time} >= {prev_time}")
 
                     # Deduplicate to remove redundant typing constraints
@@ -1228,19 +1280,20 @@ class ASPTranslator:
                     body = ", ".join(body_parts)
 
                     # Regular rule for all subtasks (no choice rules)
-                    subtask_rule = f"taskTBA({subtask_atom}, t) :- {body}."
+                    subtask_rule = f"taskTBA({subtask_atom_with_id}, t) :- {body}."
 
                     rules.append(subtask_rule)
-                
+
                 rules.append("")
         
         # Causable rules for compound tasks
         rules.append("% Causable rules for compound tasks")
         rules.append("")
-        
+
         for task_name, methods in self.method_groups.items():
             for method in methods:
-                task_atom = self._fmt_atom(method['task'])
+                # Compound task atom with ID (ID is variable from method head)
+                task_atom_with_id = self._fmt_atom_with_id(method['task'], "ID")
                 subtasks = method['subtasks']
                 method_head = self._fmt_method_head(method, self.time_var) if len(subtasks) != 0 else self._fmt_method_head(method, "t")
 
@@ -1254,11 +1307,24 @@ class ASPTranslator:
                 method_param_names = [p[0] for p in method['params']]
                 typing_clauses = self._get_typing_constraints(method_param_names, method['params'])
 
+                # Extract task parameter variables and method-only params for @id
+                task_param_vars = [self._fmt_term(p) for p in method['task'][1:] if p.startswith('?')]
+                task_vars_set = set(method['task'][1:]) if method['task'] else set()
+                method_only_param_vars = [self._fmt_term(p[0]) for p in method['params'] if p[0] not in task_vars_set]
+
                 # Build causable constraint for LAST subtask only
                 causable_clauses = []
                 if subtasks:
                     last_subtask = subtasks[-1]
-                    last_subtask_atom = self._fmt_atom(last_subtask)
+                    # Build @id for last subtask - use T (method start time)
+                    last_subtask_id = self._build_id_call(
+                        method['name'],
+                        task_param_vars,
+                        method_only_param_vars,
+                        len(subtasks) - 1,
+                        self.time_var  # T
+                    )
+                    last_subtask_with_id = self._fmt_atom_with_id(last_subtask, last_subtask_id)
 
                     # Calculate time variables for last subtask
                     n = len(subtasks)
@@ -1269,7 +1335,7 @@ class ASPTranslator:
                         start_var = self._get_time_var(n)
                         end_var = "t"
 
-                    causable_clauses.append(f"causable({last_subtask_atom}, {start_var}, {end_var})")
+                    causable_clauses.append(f"causable({last_subtask_with_id}, {start_var}, {end_var})")
                     causable_clauses.append(f"{end_var} >= {start_var}")
 
                 # Combine all body parts: typing early for better grounding
@@ -1277,31 +1343,13 @@ class ASPTranslator:
                 body = ", ".join(self._deduplicate_body_parts(body_parts))
 
                 # Final time variable
-                #final_time = self._get_time_var(len(subtasks)+1) if len(subtasks) != 0 else self.time_var
                 final_time = "t"
                 start_time = self.time_var if len(subtasks) != 0 else "t"
-                # Causable rule for compound task
-                causable_rule = f"causable({task_atom}, {start_time}, {final_time}) :- {body}."
+                # Causable rule for compound task (with ID)
+                causable_rule = f"causable({task_atom_with_id}, {start_time}, {final_time}) :- {body}."
                 rules.append(causable_rule)
-            
-            rules.append("")
 
-        # Debug: Show method selection facts
-        rules.append("% Debug: Show method selections")
-        for task_name, methods in self.method_groups.items():
-            for method in methods:
-                method_name = method['name'].replace('-', '_')
-                # Count parameters: task atom params + method-only params + time
-                task_vars = set()
-                if method['task']:
-                    for term in method['task'][1:]:
-                        if term.startswith('?'):
-                            task_vars.add(term)
-                method_only_count = sum(1 for p in method['params'] if p[0] not in task_vars)
-                # Total arity = 1 (task atom) + method_only_count + 1 (time)
-                total_arity = 1 + method_only_count + 1
-                rules.append(f"#show {method_name}/{total_arity}.")
-        rules.append("")
+            rules.append("")
 
         return "\n".join(rules)
 
@@ -1328,29 +1376,31 @@ class ASPTranslator:
         #this part changes with time
         # Translate HTN tasks
         rules.append("% HTN Tasks")
-        
+
         for i, task in enumerate(self.data.htn_tasks):
-            task_atom = self._fmt_atom(task)
+            # Use "init_X" string ID for initial tasks
+            init_id = f'"init_{i}"'
+            task_atom_with_id = self._fmt_atom_with_id(task, init_id)
 
             if i == 0:
                 # First task starts at time 0
-                rules.append(f"taskTBA({task_atom}, 0).")
+                rules.append(f"taskTBA({task_atom_with_id}, 0).")
                 rules.append("#program step(t).")
             else:
                 # Subsequent tasks depend on previous task
-                prev_task = self.data.htn_tasks[i-1]
-                prev_task_atom = self._fmt_atom(prev_task)
+                prev_init_id = f'"init_{i-1}"'
+                prev_task_with_id = self._fmt_atom_with_id(self.data.htn_tasks[i-1], prev_init_id)
 
                 if i == 1:
                     start_var = "0"
-                    end_var = "t" # T
-                    causable_call = f"causable({prev_task_atom}, {start_var}, {end_var})"
-                    rule = f"taskTBA({task_atom}, {end_var}) :- {causable_call}, {end_var} >= {start_var}, time({end_var})."
+                    end_var = "t"
+                    causable_call = f"causable({prev_task_with_id}, {start_var}, {end_var})"
+                    rule = f"taskTBA({task_atom_with_id}, {end_var}) :- {causable_call}, {end_var} >= {start_var}, time({end_var})."
                 else:
                     prev_start_var = self._get_time_var(i-1)
                     current_start_var = "t"
-                    causable_call = f"causable({prev_task_atom}, {prev_start_var}, {current_start_var})"
-                    rule = f"taskTBA({task_atom}, {current_start_var}) :- {causable_call}, {current_start_var} >= {prev_start_var}, time({prev_start_var}), time({current_start_var})."
+                    causable_call = f"causable({prev_task_with_id}, {prev_start_var}, {current_start_var})"
+                    rule = f"taskTBA({task_atom_with_id}, {current_start_var}) :- {causable_call}, {current_start_var} >= {prev_start_var}, time({prev_start_var}), time({current_start_var})."
 
                 rules.append(rule)
 
@@ -1360,18 +1410,20 @@ class ASPTranslator:
         rules.append("% Goal verification")
         if self.data.htn_tasks:
             last_task = self.data.htn_tasks[-1]
-            last_task_atom = self._fmt_atom(last_task)
+            # Use "init_X" ID for last task
+            last_init_id = f'"init_{len(self.data.htn_tasks)-1}"'
+            last_task_with_id = self._fmt_atom_with_id(last_task, last_init_id)
 
             n_tasks = len(self.data.htn_tasks)
             if n_tasks == 1:
                 start_var = "0"
-                end_var = "t" # T
+                end_var = "t"
             else:
                 start_var = self._get_time_var(n_tasks-1)
                 end_var = "t"
 
-            # Causable call for the last task
-            causable_call = f"causable({last_task_atom}, {start_var}, {end_var})"
+            # Causable call for the last task (with init ID)
+            causable_call = f"causable({last_task_with_id}, {start_var}, {end_var})"
 
             body_parts = [causable_call, f"{end_var} >= {start_var}", f"time({end_var})"]
             if start_var != "0":
