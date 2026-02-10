@@ -10,7 +10,7 @@ benchmarks = exp_dir / "benchmarks"
 framework = exp_dir / "framework"
 scripts = exp_dir / "scripts"
 
-env = LocalEnvironment(processes=1)
+env = LocalEnvironment(processes=2)
 exp = Experiment(environment=env)
 
 SUITE = [('assemblyhierarchical', 'problem01.hddl'),
