@@ -132,7 +132,7 @@ for domain, problem in SUITE:
         "run-pipeline",
         [sys.executable, "{run_pipeline}", "domain.hddl", "problem.hddl", "framework.lp",
          "domain_output.lp", "problem_output.lp", "primitives.txt", "clingo_output.txt", "orderedtasklist.txt"],
-        time_limit=1800, memory_limit=810.hddl0
+        time_limit=1800, memory_limit=8100
     )
 
 attributes = [
