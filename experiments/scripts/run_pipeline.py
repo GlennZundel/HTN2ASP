@@ -50,7 +50,7 @@ def run_workflow(domain_file, problem_file, framework_file,
     parse_result_script = os.path.join(script_dir, "parseResult.py")
     print("Übersetzung")
     subprocess.run(
-        ["py", hddl_to_lp_script, domain_file, problem_file,
+        ["python3", hddl_to_lp_script, domain_file, problem_file,
          domain_output, problem_output, primitives_output],
         check=True
     )
@@ -62,7 +62,7 @@ def run_workflow(domain_file, problem_file, framework_file,
     )
     print('Primitive Tasks extrahieren')
     subprocess.run(
-        ["py", parse_result_script, primitives_output,
+        ["python3", parse_result_script, primitives_output,
          clingo_output, tasklist_output],
         check=True
     )
